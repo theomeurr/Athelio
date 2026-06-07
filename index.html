@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Athelio — Suis ton évolution, domine ton sport</title>
+<link rel="stylesheet" href="styles.css" />
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+</head>
+<body>
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="logo">A</div>
+      <div>
+        <h1>Athelio</h1>
+        <p class="tagline">Domine ton sport.</p>
+      </div>
+    </div>
+    <nav id="nav">
+      <button class="nav-btn active" data-view="dashboard"><span>📊</span> Tableau de bord</button>
+      <button class="nav-btn" data-view="badminton"><span>🏸</span> Badminton</button>
+      <button class="nav-btn" data-view="progression"><span>📈</span> Progression</button>
+      <button class="nav-btn" data-view="goals"><span>🎯</span> Objectifs</button>
+      <button class="nav-btn" data-view="recovery"><span>🌙</span> Récupération</button>
+    </nav>
+    <div class="sidebar-footer">
+      <button id="export-btn" class="ghost-btn">⤓ Exporter données</button>
+      <button id="import-btn" class="ghost-btn">⤒ Importer</button>
+      <input type="file" id="import-file" accept="application/json" hidden />
+      <button id="reset-btn" class="ghost-btn danger">⟲ Réinitialiser</button>
+    </div>
+  </aside>
+
+  <main id="main">
+    <!-- Views injected here -->
+  </main>
+
+  <div id="modal-root"></div>
+  <div id="toast-root"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>
