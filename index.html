@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+<title>Athelio — Suis ton évolution, domine ton sport</title>
+<link rel="stylesheet" href="styles.css" />
+<link rel="manifest" href="manifest.webmanifest" />
+<meta name="theme-color" content="#0b0f14" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="Athelio" />
+<link rel="apple-touch-icon" href="apple-touch-icon.png" />
+<link rel="icon" type="image/png" href="icon-192.png" />
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script src="https://accounts.google.com/gsi/client" async defer></script>
+</head>
+<body>
+  <header class="mobile-topbar">
+    <button id="menu-toggle" class="menu-toggle" aria-label="Menu">☰</button>
+    <div class="mobile-brand">
+      <div class="logo">A</div>
+      <span>Athelio</span>
+    </div>
+  </header>
+  <div id="nav-backdrop" class="nav-backdrop"></div>
+
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="logo">A</div>
+      <div>
+        <h1>Athelio</h1>
+        <p class="tagline">Domine ton sport.</p>
+      </div>
+    </div>
+    <nav id="nav">
+      <button class="nav-btn" data-view="sobriety"><span>🥗</span> Sobriété</button>
+      <button class="nav-btn active" data-view="dashboard"><span>📊</span> Tableau de bord</button>
+      <button class="nav-btn" data-view="badminton"><span>🏸</span> Badminton</button>
+      <button class="nav-btn" data-view="runs"><span>🏃</span> Course</button>
+      <button class="nav-btn" data-view="lifts"><span>🏋️</span> Musculation</button>
+      <div class="nav-section">Suivi corporel</div>
+      <button class="nav-btn" data-view="weight"><span>⚖️</span> Poids</button>
+      <button class="nav-btn" data-view="measurements"><span>📏</span> Mensurations</button>
+      <button class="nav-btn" data-view="photos"><span>📷</span> Photos</button>
+      <div class="nav-section">Mobilité</div>
+      <button class="nav-btn" data-view="mobility"><span>🧘</span> AntiFragile</button>
+      <div class="nav-section">Autre</div>
+      <button class="nav-btn" data-view="goals"><span>🎯</span> Objectifs</button>
+      <button class="nav-btn" data-view="recovery"><span>🌙</span> Récupération</button>
+      <button class="nav-btn" data-view="videos"><span>🎥</span> Vidéos</button>
+    </nav>
+    <div class="sidebar-footer">
+      <button id="settings-btn" class="ghost-btn">⚙️ Paramètres</button>
+      <button id="export-btn" class="ghost-btn">⤓ Exporter données</button>
+      <button id="import-btn" class="ghost-btn">⤒ Importer</button>
+      <input type="file" id="import-file" accept="application/json" hidden />
+      <button id="reset-btn" class="ghost-btn danger">⟲ Réinitialiser</button>
+    </div>
+  </aside>
+
+  <main id="main">
+    <!-- Views injected here -->
+  </main>
+
+  <div id="modal-root"></div>
+  <div id="toast-root"></div>
+
+  <script src="app.js"></script>
+  <script>
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('sw.js').catch(() => {});
+      });
+    }
+  </script>
+</body>
+</html>

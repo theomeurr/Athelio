@@ -1,0 +1,2389 @@
+// =============================================================
+// Athelio — single-file state + views
+// =============================================================
+
+const STORAGE_KEY = 'athelio:v1';
+
+const defaultState = {
+  badminton: { matches: [], tournaments: [] },
+  weight: [],
+  measurements: [],
+  runs: [],
+  lifts: [],
+  photos: [],
+  goals: [],
+  recovery: [],
+  videos: [],
+  mobility: [],
+  sobriety: [],
+};
+
+let state = load();
+let currentView = 'dashboard';
+let activeCharts = [];
+
+function load() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return seed();
+    return migrate(JSON.parse(raw));
+  } catch {
+    return seed();
+  }
+}
+
+// Normalise n'importe quelle sauvegarde (y compris l'ancienne structure
+// « progression » qui regroupait poids/course/muscu/mensurations/photos)
+// vers le nouveau modèle à modules distincts.
+function migrate(parsed) {
+  const s = { ...defaultState, ...parsed };
+  const old = parsed.progression || {};
+  s.weight = parsed.weight || old.weight || [];
+  s.measurements = parsed.measurements || old.measurements || [];
+  s.runs = parsed.runs || old.runs || [];
+  s.lifts = parsed.lifts || old.lifts || [];
+  s.photos = parsed.photos || old.photos || [];
+  delete s.progression;
+  s.badminton = { ...defaultState.badminton, ...(parsed.badminton || {}) };
+  for (const k of ['weight', 'measurements', 'runs', 'lifts', 'photos', 'goals', 'recovery', 'videos', 'mobility', 'sobriety']) {
+    if (!Array.isArray(s[k])) s[k] = [];
+  }
+  if (!Array.isArray(s.badminton.matches)) s.badminton.matches = [];
+  if (!Array.isArray(s.badminton.tournaments)) s.badminton.tournaments = [];
+  return s;
+}
+
+function save() {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    return true;
+  } catch {
+    toast('Stockage plein — préfère un lien plutôt qu’un fichier vidéo lourd.');
+    return false;
+  }
+}
+
+function seed() {
+  return JSON.parse(JSON.stringify(defaultState));
+}
+
+function id() { return Math.random().toString(36).slice(2, 10); }
+
+// =============================================================
+// IndexedDB (vidéos volumineuses + snapshots de sauvegarde)
+// =============================================================
+
+const DB_NAME = 'athelio-db';
+const DB_VERSION = 1;
+const STORE_BLOBS = 'blobs';      // vidéos uploadées
+const STORE_SNAPSHOTS = 'snapshots'; // historiques d'auto-backup
+
+function idbOpen() {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(DB_NAME, DB_VERSION);
+    req.onupgradeneeded = () => {
+      const db = req.result;
+      if (!db.objectStoreNames.contains(STORE_BLOBS)) db.createObjectStore(STORE_BLOBS);
+      if (!db.objectStoreNames.contains(STORE_SNAPSHOTS)) db.createObjectStore(STORE_SNAPSHOTS);
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+async function idbPut(store, key, value) {
+  const db = await idbOpen();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(store, 'readwrite');
+    tx.objectStore(store).put(value, key);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
+async function idbGet(store, key) {
+  const db = await idbOpen();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(store, 'readonly');
+    const req = tx.objectStore(store).get(key);
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+async function idbDel(store, key) {
+  const db = await idbOpen();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(store, 'readwrite');
+    tx.objectStore(store).delete(key);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
+async function idbAll(store) {
+  const db = await idbOpen();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(store, 'readonly');
+    const out = [];
+    tx.objectStore(store).openCursor().onsuccess = (e) => {
+      const cur = e.target.result;
+      if (cur) { out.push({ key: cur.key, value: cur.value }); cur.continue(); }
+      else resolve(out);
+    };
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
+// Cache d'URLs blob (révoquer pour libérer la RAM si besoin)
+const blobUrlCache = new Map();
+async function getVideoBlobUrl(key) {
+  if (blobUrlCache.has(key)) return blobUrlCache.get(key);
+  const blob = await idbGet(STORE_BLOBS, key);
+  if (!blob) return null;
+  const url = URL.createObjectURL(blob);
+  blobUrlCache.set(key, url);
+  return url;
+}
+function revokeAllBlobUrls() {
+  blobUrlCache.forEach((u) => URL.revokeObjectURL(u));
+  blobUrlCache.clear();
+}
+
+// =============================================================
+// Crypto (PIN)
+// =============================================================
+
+async function sha256(str) {
+  const buf = new TextEncoder().encode(str);
+  const hash = await crypto.subtle.digest('SHA-256', buf);
+  return Array.from(new Uint8Array(hash)).map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+function randomSalt() {
+  return Array.from(crypto.getRandomValues(new Uint8Array(16)))
+    .map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+const PIN_KEY = 'athelio:pin';
+function getPinConfig() {
+  try { return JSON.parse(localStorage.getItem(PIN_KEY)) || null; } catch { return null; }
+}
+function setPinConfig(cfg) {
+  if (cfg) localStorage.setItem(PIN_KEY, JSON.stringify(cfg));
+  else localStorage.removeItem(PIN_KEY);
+}
+async function checkPin(pin) {
+  const cfg = getPinConfig();
+  if (!cfg) return true;
+  const h = await sha256(pin + cfg.salt);
+  return h === cfg.hash;
+}
+async function savePin(pin) {
+  const salt = randomSalt();
+  const hash = await sha256(pin + salt);
+  setPinConfig({ salt, hash });
+}
+
+// =============================================================
+// Google Drive sync (JSON + vidéos)
+// =============================================================
+
+const DRIVE_CLIENT_KEY     = 'athelio:drive:clientId';
+const DRIVE_FOLDER_KEY     = 'athelio:drive:folderId';
+const DRIVE_LAST_BACKUP    = 'athelio:drive:lastBackup';
+const DRIVE_SCOPE          = 'https://www.googleapis.com/auth/drive.file';
+const DRIVE_FOLDER_NAME    = 'Athelio Backups';
+
+let driveTokenClient = null;
+let driveToken = null; // { access_token, expires_at }
+
+function driveClientId()   { return localStorage.getItem(DRIVE_CLIENT_KEY) || ''; }
+function setDriveClientId(v) { v ? localStorage.setItem(DRIVE_CLIENT_KEY, v.trim()) : localStorage.removeItem(DRIVE_CLIENT_KEY); }
+function driveLastBackup() { return +localStorage.getItem(DRIVE_LAST_BACKUP) || 0; }
+
+function initDriveClient() {
+  if (driveTokenClient || !driveClientId() || !window.google?.accounts?.oauth2) return;
+  driveTokenClient = google.accounts.oauth2.initTokenClient({
+    client_id: driveClientId(),
+    scope: DRIVE_SCOPE,
+    callback: () => {}, // remplacé dynamiquement
+  });
+}
+
+function driveConnected() {
+  return !!(driveToken && driveToken.expires_at > Date.now());
+}
+
+function driveRequestToken({ silent = false } = {}) {
+  initDriveClient();
+  if (!driveTokenClient) return Promise.reject(new Error('Drive non configuré (Client ID manquant ou GSI non chargé).'));
+  return new Promise((resolve, reject) => {
+    driveTokenClient.callback = (resp) => {
+      if (resp.error) return reject(new Error(resp.error_description || resp.error));
+      driveToken = {
+        access_token: resp.access_token,
+        expires_at: Date.now() + (resp.expires_in - 60) * 1000,
+      };
+      resolve(resp.access_token);
+    };
+    try { driveTokenClient.requestAccessToken({ prompt: silent ? '' : 'consent' }); }
+    catch (e) { reject(e); }
+  });
+}
+
+async function driveAuth({ silent = false } = {}) {
+  if (driveConnected()) return driveToken.access_token;
+  return driveRequestToken({ silent });
+}
+
+function driveDisconnect() {
+  if (driveToken?.access_token) {
+    try { google.accounts.oauth2.revoke(driveToken.access_token, () => {}); } catch {}
+  }
+  driveToken = null;
+  localStorage.removeItem(DRIVE_FOLDER_KEY);
+  toast('Déconnecté de Google Drive');
+}
+
+async function driveApi(url, opts = {}) {
+  const token = await driveAuth({ silent: true });
+  const headers = { ...(opts.headers || {}), Authorization: 'Bearer ' + token };
+  const r = await fetch(url, { ...opts, headers });
+  if (!r.ok) {
+    const txt = await r.text().catch(() => '');
+    throw new Error(`Drive ${r.status}: ${txt.slice(0, 200)}`);
+  }
+  return r;
+}
+
+async function driveFolderId() {
+  const cached = localStorage.getItem(DRIVE_FOLDER_KEY);
+  if (cached) return cached;
+  const q = encodeURIComponent(`name='${DRIVE_FOLDER_NAME}' and mimeType='application/vnd.google-apps.folder' and trashed=false`);
+  const r = await driveApi(`https://www.googleapis.com/drive/v3/files?q=${q}&fields=files(id,name)`);
+  const data = await r.json();
+  if (data.files?.length) {
+    localStorage.setItem(DRIVE_FOLDER_KEY, data.files[0].id);
+    return data.files[0].id;
+  }
+  const create = await driveApi('https://www.googleapis.com/drive/v3/files', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: DRIVE_FOLDER_NAME, mimeType: 'application/vnd.google-apps.folder' }),
+  });
+  const cd = await create.json();
+  localStorage.setItem(DRIVE_FOLDER_KEY, cd.id);
+  return cd.id;
+}
+
+// Upload simple (JSON) en multipart
+async function driveUploadJson(name, jsonStr, parents) {
+  const metadata = { name, mimeType: 'application/json', parents };
+  const boundary = '----ATHELIO' + Math.random().toString(36).slice(2);
+  const body =
+    `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(metadata)}\r\n` +
+    `--${boundary}\r\nContent-Type: application/json\r\n\r\n${jsonStr}\r\n--${boundary}--`;
+  const r = await driveApi('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,size,createdTime', {
+    method: 'POST',
+    headers: { 'Content-Type': `multipart/related; boundary=${boundary}` },
+    body,
+  });
+  return r.json();
+}
+
+// Upload « resumable » (vidéos) — utilisé pour > quelques Mo
+async function driveUploadBlob(name, blob, parents, onProgress) {
+  // 1) initier la session resumable
+  const init = await driveApi('https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&fields=id,name,size,createdTime', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json; charset=UTF-8',
+      'X-Upload-Content-Type': blob.type || 'application/octet-stream',
+      'X-Upload-Content-Length': String(blob.size),
+    },
+    body: JSON.stringify({ name, parents, mimeType: blob.type || 'application/octet-stream' }),
+  });
+  const uploadUrl = init.headers.get('Location');
+  if (!uploadUrl) throw new Error('Pas d\'URL d\'upload resumable.');
+
+  // 2) PUT du contenu en un coup avec XHR (pour la progression)
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('PUT', uploadUrl);
+    xhr.setRequestHeader('Content-Type', blob.type || 'application/octet-stream');
+    if (onProgress) xhr.upload.onprogress = (ev) => onProgress(ev.loaded, ev.total);
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        try { resolve(JSON.parse(xhr.responseText)); } catch { resolve({}); }
+      } else reject(new Error('Upload échoué: ' + xhr.status));
+    };
+    xhr.onerror = () => reject(new Error('Erreur réseau pendant l\'upload.'));
+    xhr.send(blob);
+  });
+}
+
+async function driveListBackups() {
+  const folderId = await driveFolderId();
+  const q = encodeURIComponent(`'${folderId}' in parents and mimeType='application/json' and trashed=false`);
+  const r = await driveApi(`https://www.googleapis.com/drive/v3/files?q=${q}&fields=files(id,name,createdTime,size)&orderBy=createdTime desc&pageSize=50`);
+  const d = await r.json();
+  return d.files || [];
+}
+
+async function driveDownloadJson(fileId) {
+  const r = await driveApi(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`);
+  return r.json();
+}
+
+async function driveDownloadBlob(fileId) {
+  const r = await driveApi(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`);
+  return r.blob();
+}
+
+// Backup complet : JSON + vidéos manquantes
+async function driveBackupNow(onStatus = () => {}) {
+  await driveAuth({ silent: false });
+  const folderId = await driveFolderId();
+
+  // 1) Uploader les vidéos qui n'ont pas encore de driveFileId
+  const vids = state.videos.filter(v => v.blobKey && !v.driveFileId);
+  for (let i = 0; i < vids.length; i++) {
+    const v = vids[i];
+    onStatus(`📹 Vidéo ${i + 1}/${vids.length}…`);
+    const blob = await idbGet(STORE_BLOBS, v.blobKey);
+    if (!blob) continue;
+    const name = `video-${v.id}.${(v.mime || 'video/mp4').split('/')[1] || 'mp4'}`;
+    const file = await driveUploadBlob(name, blob, [folderId], (loaded, total) => {
+      const pct = Math.round((loaded / total) * 100);
+      onStatus(`📹 Vidéo ${i + 1}/${vids.length} — ${pct} %`);
+    });
+    v.driveFileId = file.id;
+  }
+  save();
+
+  // 2) JSON complet (les vidéos contiennent désormais leur driveFileId)
+  onStatus('📦 Sauvegarde JSON…');
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+  const file = await driveUploadJson(`athelio-${stamp}.json`, JSON.stringify(state, null, 2), [folderId]);
+
+  localStorage.setItem(DRIVE_LAST_BACKUP, String(Date.now()));
+  onStatus(`✅ Sauvegarde terminée (${file.name})`);
+  return file;
+}
+
+// Restaurer depuis un backup JSON Drive (récupère aussi les vidéos manquantes)
+async function driveRestoreFromFile(fileId, onStatus = () => {}) {
+  await driveAuth({ silent: false });
+  onStatus('📥 Téléchargement du backup…');
+  const data = await driveDownloadJson(fileId);
+  const restored = migrate(data);
+
+  // Récupérer les blobs vidéo manquants depuis Drive
+  const vids = (restored.videos || []).filter(v => v.driveFileId && v.blobKey);
+  for (let i = 0; i < vids.length; i++) {
+    const v = vids[i];
+    const present = await idbGet(STORE_BLOBS, v.blobKey).catch(() => null);
+    if (present) continue;
+    onStatus(`📹 Vidéo ${i + 1}/${vids.length}…`);
+    try {
+      const blob = await driveDownloadBlob(v.driveFileId);
+      await idbPut(STORE_BLOBS, v.blobKey, blob);
+    } catch (e) { /* on ignore une vidéo manquante */ }
+  }
+
+  state = restored;
+  save();
+  revokeAllBlobUrls();
+  navigate('dashboard');
+  onStatus('✅ Données restaurées depuis Google Drive');
+  toast('Restauration terminée');
+}
+
+async function maybeAutoDriveBackup() {
+  if (!driveClientId()) return;
+  if (Date.now() - driveLastBackup() < 86400000) return; // 1/jour max
+  // Tentative silencieuse — si on n'a pas de token actif, on n'embête pas l'utilisateur
+  try {
+    await driveAuth({ silent: true });
+    await driveBackupNow();
+  } catch { /* silencieux */ }
+}
+
+// =============================================================
+// Helpers
+// =============================================================
+
+function $(sel, root = document) { return root.querySelector(sel); }
+function $$(sel, root = document) { return [...root.querySelectorAll(sel)]; }
+
+function el(tag, attrs = {}, ...children) {
+  const n = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (k === 'class') n.className = v;
+    else if (k === 'html') n.innerHTML = v;
+    else if (k.startsWith('on')) n.addEventListener(k.slice(2).toLowerCase(), v);
+    else if (v !== undefined && v !== null) n.setAttribute(k, v);
+  }
+  for (const c of children.flat()) {
+    if (c == null || c === false) continue;
+    n.appendChild(typeof c === 'string' ? document.createTextNode(c) : c);
+  }
+  return n;
+}
+
+function fmtDate(s) {
+  if (!s) return '';
+  const d = new Date(s);
+  return d.toLocaleDateString('fr-FR', { day: '2-digit', month: 'short', year: 'numeric' });
+}
+
+function shortDate(s) {
+  const d = new Date(s);
+  return d.toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit' });
+}
+
+function today() { return new Date().toISOString().slice(0, 10); }
+
+function dateDiffDays(a, b) { return Math.round((new Date(a) - new Date(b)) / 86400000); }
+
+// Jours sans écart : nombre de jours depuis le dernier écart (ou depuis le 1er suivi)
+function sobrietyStreak() {
+  const entries = state.sobriety.map(s => s.date).sort();
+  if (!entries.length) return 0;
+  const slips = state.sobriety.filter(s => s.hasSlip).map(s => s.date).sort();
+  const ref = slips.length ? slips[slips.length - 1] : entries[0];
+  return Math.max(0, dateDiffDays(today(), ref));
+}
+
+// Série d'entraînement : jours consécutifs (jusqu'à aujourd'hui/hier) avec au moins une activité
+function trainingStreak() {
+  const set = new Set();
+  state.runs.forEach(r => set.add(r.date));
+  state.lifts.forEach(l => set.add(l.date));
+  state.mobility.forEach(m => set.add(m.date));
+  state.badminton.matches.forEach(m => set.add(m.date));
+  if (!set.size) return 0;
+  const day = 86400000;
+  const iso = (d) => d.toISOString().slice(0, 10);
+  let cursor = new Date(today());
+  if (!set.has(iso(cursor))) cursor = new Date(cursor.getTime() - day); // tolère aujourd'hui non encore loggé
+  let streak = 0;
+  while (set.has(iso(cursor))) { streak++; cursor = new Date(cursor.getTime() - day); }
+  return streak;
+}
+
+function toast(msg) {
+  const t = el('div', { class: 'toast' }, msg);
+  $('#toast-root').appendChild(t);
+  setTimeout(() => t.remove(), 2400);
+}
+
+function openModal(title, contentFactory) {
+  const root = $('#modal-root');
+  const close = () => root.innerHTML = '';
+  const backdrop = el('div', { class: 'modal-backdrop', onClick: (e) => { if (e.target === backdrop) close(); } },
+    el('div', { class: 'modal' },
+      el('h3', {}, title),
+      contentFactory(close),
+    )
+  );
+  root.innerHTML = '';
+  root.appendChild(backdrop);
+}
+
+function confirmAction(msg, onYes) {
+  openModal('Confirmation', (close) => el('div', {},
+    el('p', { style: 'margin: 0 0 16px; color: var(--text-dim); font-size: 14px;' }, msg),
+    el('div', { class: 'form-actions' },
+      el('button', { class: 'btn secondary', onClick: close }, 'Annuler'),
+      el('button', { class: 'btn', onClick: () => { onYes(); close(); } }, 'Confirmer'),
+    ),
+  ));
+}
+
+function destroyCharts() {
+  activeCharts.forEach(c => { try { c.destroy(); } catch {} });
+  activeCharts = [];
+}
+
+function chart(ctx, config) {
+  const c = new Chart(ctx, config);
+  activeCharts.push(c);
+  return c;
+}
+
+const chartTheme = {
+  text: '#8a9aae',
+  grid: 'rgba(255,255,255,0.05)',
+  accent: '#ff5b2e',
+  accent2: '#ffb547',
+  info: '#3aa8ff',
+  success: '#2ecc71',
+};
+
+function baseScales(yLabel = '') {
+  return {
+    x: {
+      ticks: { color: chartTheme.text, font: { size: 11 } },
+      grid: { color: chartTheme.grid },
+    },
+    y: {
+      ticks: { color: chartTheme.text, font: { size: 11 } },
+      grid: { color: chartTheme.grid },
+      title: yLabel ? { display: true, text: yLabel, color: chartTheme.text } : undefined,
+    },
+  };
+}
+
+function viewHeader(title, subtitle, ...actions) {
+  return el('div', { class: 'view-header' },
+    el('div', {}, el('h2', {}, title), el('p', {}, subtitle)),
+    actions.length ? el('div', { style: 'display: flex; gap: 8px; flex-wrap: wrap;' }, ...actions) : null,
+  );
+}
+
+// =============================================================
+// Router
+// =============================================================
+
+function navigate(view) {
+  currentView = view;
+  $$('.nav-btn').forEach(b => b.classList.toggle('active', b.dataset.view === view));
+  destroyCharts();
+  const main = $('#main');
+  main.innerHTML = '';
+  const renderer = views[view] || views.dashboard;
+  main.appendChild(renderer());
+}
+
+// =============================================================
+// Views
+// =============================================================
+
+const views = {};
+
+// ---------- Dashboard ----------
+
+views.dashboard = () => {
+  const wrap = el('div');
+  wrap.appendChild(el('div', { class: 'view-header' },
+    el('div', {},
+      el('h2', {}, 'Tableau de bord'),
+      el('p', {}, 'Une vue d\'ensemble de ta progression.'),
+    ),
+  ));
+
+  const matches = state.badminton.matches;
+  const wins = matches.filter(m => m.result === 'win').length;
+  const winRate = matches.length ? Math.round((wins / matches.length) * 100) : 0;
+  const lastWeight = state.weight.at(-1);
+  const firstWeight = state.weight[0];
+  const weightDelta = lastWeight && firstWeight ? (lastWeight.value - firstWeight.value).toFixed(1) : null;
+  const totalDistance = state.runs.reduce((s, r) => s + (r.distance || 0), 0);
+  const recovery = state.recovery.at(-1);
+
+  const kpis = el('div', { class: 'grid cols-4' });
+  kpis.appendChild(kpiCard('🏸 Matchs joués', matches.length, `${wins} V — ${matches.length - wins} D`));
+  kpis.appendChild(kpiCard('🏆 Taux de victoire', `${winRate}%`, '', winRate >= 50 ? 'success' : 'danger'));
+  kpis.appendChild(kpiCard('⚖️ Poids actuel', lastWeight ? `${lastWeight.value} kg` : '—',
+    weightDelta !== null ? `${weightDelta > 0 ? '+' : ''}${weightDelta} kg` : '', weightDelta < 0 ? 'success' : 'accent'));
+  kpis.appendChild(kpiCard('🏃 Distance totale', `${totalDistance.toFixed(1)} km`, `${state.runs.length} sorties`));
+  wrap.appendChild(kpis);
+
+  wrap.appendChild(el('div', { style: 'height: 16px;' }));
+
+  // Séries / streaks
+  const sStreak = sobrietyStreak();
+  const tStreak = trainingStreak();
+  const streaks = el('div', { class: 'grid cols-2' });
+  streaks.appendChild(streakCard('🔥', sStreak, 'Série sans écart',
+    sStreak >= 7 ? 'En feu, continue !' : (sStreak ? 'jours sans écart' : 'commence aujourd\'hui')));
+  streaks.appendChild(streakCard('💪', tStreak, 'Série d\'entraînement',
+    tStreak >= 3 ? 'belle régularité' : (tStreak ? 'jours d\'affilée' : 'bouge aujourd\'hui')));
+  wrap.appendChild(streaks);
+
+  wrap.appendChild(el('div', { style: 'height: 16px;' }));
+
+  const charts = el('div', { class: 'grid cols-2' });
+
+  const weightCard = el('div', { class: 'card' }, el('h3', {}, 'Évolution du poids'),
+    el('div', { class: 'chart-wrap' }, el('canvas', { id: 'dash-weight' })));
+  const matchCard = el('div', { class: 'card' }, el('h3', {}, 'Résultats badminton'),
+    el('div', { class: 'chart-wrap' }, el('canvas', { id: 'dash-matches' })));
+  charts.appendChild(weightCard);
+  charts.appendChild(matchCard);
+  wrap.appendChild(charts);
+
+  wrap.appendChild(el('div', { style: 'height: 16px;' }));
+
+  // Goals + Recovery side by side
+  const lower = el('div', { class: 'grid cols-2' });
+  const goalsCard = el('div', { class: 'card' }, el('h3', {}, 'Objectifs en cours'));
+  const activeGoals = state.goals.filter(g => !g.done).slice(0, 4);
+  if (!activeGoals.length) {
+    goalsCard.appendChild(emptyState('Aucun objectif', 'Ajoute ton premier objectif dans la section Objectifs.'));
+  } else {
+    activeGoals.forEach(g => goalsCard.appendChild(goalRow(g, false)));
+  }
+  lower.appendChild(goalsCard);
+
+  const recCard = el('div', { class: 'card' }, el('h3', {}, 'Récupération récente'));
+  if (!recovery) {
+    recCard.appendChild(emptyState('Aucune entrée', 'Note ta fatigue et tes douleurs.'));
+  } else {
+    const rows = el('div', {});
+    rows.appendChild(infoRow('Fatigue', `${recovery.fatigue}/5`));
+    rows.appendChild(infoRow('Douleurs', `${recovery.pain}/5`));
+    rows.appendChild(infoRow('Dernière entrée', fmtDate(recovery.date)));
+    recCard.appendChild(rows);
+  }
+  lower.appendChild(recCard);
+  wrap.appendChild(lower);
+
+  // Charts deferred until in DOM
+  setTimeout(() => {
+    if (state.weight.length) {
+      chart($('#dash-weight').getContext('2d'), {
+        type: 'line',
+        data: {
+          labels: state.weight.map(w => shortDate(w.date)),
+          datasets: [{
+            label: 'Poids (kg)',
+            data: state.weight.map(w => w.value),
+            borderColor: chartTheme.accent,
+            backgroundColor: 'rgba(255, 91, 46, 0.15)',
+            fill: true,
+            tension: 0.35,
+            pointRadius: 4,
+            pointBackgroundColor: chartTheme.accent,
+          }],
+        },
+        options: { responsive: true, maintainAspectRatio: false,
+          plugins: { legend: { display: false } },
+          scales: baseScales() }
+      });
+    }
+    const wins = state.badminton.matches.filter(m => m.result === 'win').length;
+    const losses = state.badminton.matches.filter(m => m.result === 'loss').length;
+    chart($('#dash-matches').getContext('2d'), {
+      type: 'doughnut',
+      data: {
+        labels: ['Victoires', 'Défaites'],
+        datasets: [{
+          data: [wins, losses],
+          backgroundColor: [chartTheme.success, chartTheme.accent],
+          borderColor: 'transparent',
+        }],
+      },
+      options: { responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { position: 'bottom', labels: { color: chartTheme.text } } },
+        cutout: '65%' }
+    });
+  }, 0);
+
+  return wrap;
+};
+
+function kpiCard(label, value, sub = '', kind = '') {
+  return el('div', { class: 'card kpi' },
+    el('div', { class: 'label' }, label),
+    el('div', { class: `value ${kind}` }, String(value)),
+    sub ? el('div', { class: 'sub' }, sub) : null,
+  );
+}
+
+function streakCard(emoji, days, label, sub = '') {
+  return el('div', { class: `card streak ${days ? 'on' : ''}` },
+    el('div', { class: 'streak-emoji' }, emoji),
+    el('div', { class: 'streak-body' },
+      el('div', { class: 'streak-value' }, String(days), el('span', { class: 'streak-unit' }, days > 1 ? ' jours' : ' jour')),
+      el('div', { class: 'streak-label' }, label),
+      sub ? el('div', { class: 'streak-sub' }, sub) : null,
+    ),
+  );
+}
+
+function infoRow(k, v) {
+  return el('div', { class: 'list-item' },
+    el('div', { class: 'title', style: 'font-weight: 500; color: var(--text-dim); font-size: 13px;' }, k),
+    el('div', { style: 'font-weight: 600; font-size: 14px;' }, v),
+  );
+}
+
+function emptyState(title, sub) {
+  return el('div', { class: 'empty' }, el('strong', {}, title), sub);
+}
+
+// ---------- Badminton ----------
+
+let badmintonTab = 'matches';
+
+views.badminton = () => {
+  const wrap = el('div');
+  wrap.appendChild(viewHeader('Badminton', 'Suivi des matchs, tournois, et statistiques.',
+    el('button', { class: 'btn', onClick: () => openMatchForm() }, '+ Nouveau match'),
+    el('button', { class: 'btn secondary', onClick: () => openTournamentForm() }, '+ Tournoi'),
+  ));
+
+  // KPI per game type
+  const matches = state.badminton.matches;
+  const byType = (t) => matches.filter(m => m.type === t);
+  const wr = (arr) => arr.length ? Math.round(arr.filter(m => m.result === 'win').length / arr.length * 100) : 0;
+
+  const kpis = el('div', { class: 'grid cols-3' });
+  ['simple', 'double', 'mixte'].forEach(type => {
+    const arr = byType(type);
+    kpis.appendChild(el('div', { class: 'card kpi' },
+      el('div', { class: 'label' }, type.charAt(0).toUpperCase() + type.slice(1)),
+      el('div', { class: 'value' }, String(arr.length)),
+      el('div', { class: 'sub' }, `Taux de victoire : ${wr(arr)}%`),
+    ));
+  });
+  wrap.appendChild(kpis);
+
+  wrap.appendChild(el('div', { style: 'height: 16px;' }));
+
+  // Tabs
+  const tabs = el('div', { class: 'tabs' },
+    tabBtn('matches', 'Matchs', () => { badmintonTab = 'matches'; navigate('badminton'); }),
+    tabBtn('tournaments', 'Tournois & interclubs', () => { badmintonTab = 'tournaments'; navigate('badminton'); }),
+    tabBtn('stats', 'Statistiques', () => { badmintonTab = 'stats'; navigate('badminton'); }),
+  );
+  wrap.appendChild(tabs);
+
+  if (badmintonTab === 'matches') {
+    const card = el('div', { class: 'card' });
+    if (!matches.length) {
+      card.appendChild(emptyState('Aucun match', 'Ajoute ton premier match pour commencer.'));
+    } else {
+      const table = el('table');
+      table.appendChild(el('thead', {}, el('tr', {},
+        ...['Date', 'Adversaire', 'Type', 'Score', 'Résultat', ''].map(h => el('th', {}, h)))));
+      const tbody = el('tbody');
+      [...matches].sort((a, b) => b.date.localeCompare(a.date)).forEach(m => {
+        const hasNotes = (m.goodPoints || m.badPoints || m.workPoints || m.notes || '').trim().length > 0;
+        const detailRow = el('tr', { class: 'match-notes-row', hidden: '' },
+          el('td', { colspan: '6' },
+            el('div', { class: 'match-notes' },
+              noteBlock('✅ Bien fait', m.goodPoints),
+              noteBlock('❌ Mal fait', m.badPoints),
+              noteBlock('🎯 À travailler', m.workPoints),
+              (m.notes && m.notes.trim()) ? noteBlock('📝 Notes', m.notes) : null,
+            ),
+          ),
+        );
+        const toggle = hasNotes ? el('button', { class: 'icon-btn', title: 'Voir les notes', onClick: (e) => {
+          const open = detailRow.hasAttribute('hidden');
+          if (open) detailRow.removeAttribute('hidden'); else detailRow.setAttribute('hidden', '');
+          e.currentTarget.textContent = open ? '▴' : '▾';
+        } }, '▾') : null;
+        tbody.appendChild(el('tr', {},
+          el('td', {}, fmtDate(m.date)),
+          el('td', {}, m.opponent || '—'),
+          el('td', { html: `<span class="badge neutral">${m.type}</span>` }),
+          el('td', {}, `${m.myScore} – ${m.oppScore}`),
+          el('td', { html: `<span class="badge ${m.result === 'win' ? 'win' : 'loss'}">${m.result === 'win' ? 'Victoire' : 'Défaite'}</span>` }),
+          el('td', { style: 'text-align: right; white-space: nowrap;' },
+            toggle,
+            el('button', { class: 'icon-btn', onClick: () => openMatchForm(m) }, '✎'),
+            el('button', { class: 'icon-btn danger', onClick: () => confirmAction('Supprimer ce match ?', () => {
+              state.badminton.matches = state.badminton.matches.filter(x => x.id !== m.id);
+              save(); navigate('badminton'); toast('Match supprimé');
+            }) }, '✕'),
+          ),
+        ));
+        tbody.appendChild(detailRow);
+      });
+      table.appendChild(tbody);
+      card.appendChild(table);
+    }
+    wrap.appendChild(card);
+  } else if (badmintonTab === 'tournaments') {
+    const card = el('div', { class: 'card' });
+    const list = state.badminton.tournaments;
+    if (!list.length) {
+      card.appendChild(emptyState('Aucun tournoi', 'Ajoute un tournoi ou un interclub.'));
+    } else {
+      list.forEach(t => card.appendChild(el('div', { class: 'list-item' },
+        el('div', {},
+          el('div', { class: 'title' }, t.name),
+          el('div', { class: 'meta' }, `${fmtDate(t.date)} · ${t.location || '—'} · ${t.result || '—'}`),
+        ),
+        el('div', { class: 'actions' },
+          el('button', { class: 'icon-btn', onClick: () => openTournamentForm(t) }, '✎'),
+          el('button', { class: 'icon-btn danger', onClick: () => confirmAction('Supprimer ce tournoi ?', () => {
+            state.badminton.tournaments = state.badminton.tournaments.filter(x => x.id !== t.id);
+            save(); navigate('badminton'); toast('Tournoi supprimé');
+          }) }, '✕'),
+        ),
+      )));
+    }
+    wrap.appendChild(card);
+  } else {
+    // stats
+    const grid = el('div', { class: 'grid cols-2' });
+    grid.appendChild(el('div', { class: 'card' }, el('h3', {}, 'Répartition par type'),
+      el('div', { class: 'chart-wrap' }, el('canvas', { id: 'bad-types' }))));
+    grid.appendChild(el('div', { class: 'card' }, el('h3', {}, 'Victoires / Défaites par type'),
+      el('div', { class: 'chart-wrap' }, el('canvas', { id: 'bad-results' }))));
+    wrap.appendChild(grid);
+    setTimeout(() => {
+      const types = ['simple', 'double', 'mixte'];
+      chart($('#bad-types').getContext('2d'), {
+        type: 'bar',
+        data: { labels: types, datasets: [{ label: 'Matchs', data: types.map(t => byType(t).length),
+          backgroundColor: chartTheme.accent }] },
+        options: { responsive: true, maintainAspectRatio: false,
+          plugins: { legend: { display: false } }, scales: baseScales() }
+      });
+      chart($('#bad-results').getContext('2d'), {
+        type: 'bar',
+        data: {
+          labels: types,
+          datasets: [
+            { label: 'Victoires', data: types.map(t => byType(t).filter(m => m.result === 'win').length), backgroundColor: chartTheme.success },
+            { label: 'Défaites', data: types.map(t => byType(t).filter(m => m.result === 'loss').length), backgroundColor: chartTheme.accent },
+          ],
+        },
+        options: { responsive: true, maintainAspectRatio: false,
+          plugins: { legend: { position: 'bottom', labels: { color: chartTheme.text } } },
+          scales: { ...baseScales(), x: { ...baseScales().x, stacked: true }, y: { ...baseScales().y, stacked: true } } }
+      });
+    }, 0);
+  }
+
+  return wrap;
+};
+
+function noteBlock(label, text) {
+  return el('div', { class: 'note-block' },
+    el('div', { class: 'note-label' }, label),
+    el('div', { class: 'note-text' }, (text && text.trim()) ? text : '—'),
+  );
+}
+
+function tabBtn(key, label, onClick) {
+  return el('button', { class: `tab ${badmintonTab === key ? 'active' : ''}`, onClick }, label);
+}
+
+function openMatchForm(existing) {
+  const m = existing || { date: today(), opponent: '', type: 'simple', myScore: 21, oppScore: 0, goodPoints: '', badPoints: '', workPoints: '' };
+  openModal(existing ? 'Modifier le match' : 'Nouveau match', (close) => {
+    const form = el('form', { class: 'form', onSubmit: (e) => {
+      e.preventDefault();
+      const data = Object.fromEntries(new FormData(e.target));
+      const entry = {
+        id: existing?.id || id(),
+        date: data.date,
+        opponent: data.opponent.trim(),
+        type: data.type,
+        myScore: +data.myScore,
+        oppScore: +data.oppScore,
+        result: +data.myScore > +data.oppScore ? 'win' : 'loss',
+        goodPoints: data.goodPoints.trim(),
+        badPoints: data.badPoints.trim(),
+        workPoints: data.workPoints.trim(),
+        notes: existing?.notes || '',
+      };
+      if (existing) {
+        state.badminton.matches = state.badminton.matches.map(x => x.id === entry.id ? entry : x);
+      } else {
+        state.badminton.matches.push(entry);
+      }
+      save(); close(); navigate('badminton'); toast(existing ? 'Match mis à jour' : 'Match ajouté');
+    } });
+    form.innerHTML = `
+      <div class="form-row">
+        <div><label>Date</label><input type="date" name="date" value="${m.date}" required></div>
+        <div><label>Type</label><select name="type">
+          <option value="simple" ${m.type === 'simple' ? 'selected' : ''}>Simple</option>
+          <option value="double" ${m.type === 'double' ? 'selected' : ''}>Double</option>
+          <option value="mixte" ${m.type === 'mixte' ? 'selected' : ''}>Mixte</option>
+        </select></div>
+      </div>
+      <div><label>Adversaire</label><input type="text" name="opponent" value="${m.opponent || ''}" placeholder="Nom ou équipe"></div>
+      <div class="form-row">
+        <div><label>Mon score</label><input type="number" name="myScore" value="${m.myScore}" min="0" required></div>
+        <div><label>Score adverse</label><input type="number" name="oppScore" value="${m.oppScore}" min="0" required></div>
+      </div>
+      <div><label>✅ Qu’est-ce que j’ai bien fait&nbsp;?</label><textarea name="goodPoints" placeholder="Points forts du match…">${m.goodPoints || ''}</textarea></div>
+      <div><label>❌ Qu’est-ce que j’ai mal fait&nbsp;?</label><textarea name="badPoints" placeholder="Erreurs, points faibles…">${m.badPoints || ''}</textarea></div>
+      <div><label>🎯 Sur quels points dois-je bosser&nbsp;?</label><textarea name="workPoints" placeholder="Axes de travail pour la prochaine fois…">${m.workPoints || ''}</textarea></div>
+      <div class="form-actions">
+        <button type="button" class="btn secondary">Annuler</button>
+        <button type="submit" class="btn">Enregistrer</button>
+      </div>
+    `;
+    form.querySelector('button[type=button]').onclick = close;
+    return form;
+  });
+}
+
+function openTournamentForm(existing) {
+  const t = existing || { date: today(), name: '', location: '', result: '' };
+  openModal(existing ? 'Modifier le tournoi' : 'Nouveau tournoi', (close) => {
+    const form = el('form', { class: 'form', onSubmit: (e) => {
+      e.preventDefault();
+      const data = Object.fromEntries(new FormData(e.target));
+      const entry = { id: existing?.id || id(), ...data };
+      if (existing) state.badminton.tournaments = state.badminton.tournaments.map(x => x.id === entry.id ? entry : x);
+      else state.badminton.tournaments.push(entry);
+      save(); close(); navigate('badminton'); toast(existing ? 'Tournoi mis à jour' : 'Tournoi ajouté');
+    } });
+    form.innerHTML = `
+      <div><label>Nom</label><input type="text" name="name" value="${t.name || ''}" required></div>
+      <div class="form-row">
+        <div><label>Date</label><input type="date" name="date" value="${t.date}" required></div>
+        <div><label>Lieu</label><input type="text" name="location" value="${t.location || ''}"></div>
+      </div>
+      <div><label>Résultat</label><input type="text" name="result" value="${t.result || ''}" placeholder="ex : Demi-finale, Victoire 3-1"></div>
+      <div class="form-actions">
+        <button type="button" class="btn secondary">Annuler</button>
+        <button type="submit" class="btn">Enregistrer</button>
+      </div>
+    `;
+    form.querySelector('button[type=button]').onclick = close;
+    return form;
+  });
+}
+
+// ---------- Poids ----------
+
+views.weight = () => {
+  const wrap = el('div');
+  wrap.appendChild(viewHeader('Poids', 'Suis l’évolution de ton poids de forme.',
+    el('button', { class: 'btn', onClick: () => simpleEntryForm('weight', { label: 'Poids (kg)', field: 'value', type: 'number', step: '0.1' }) }, '+ Nouvelle pesée')));
+
+  const card = el('div', { class: 'card' }, el('h3', {}, 'Évolution du poids'),
+    el('div', { class: 'chart-wrap tall' }, el('canvas', { id: 'w-chart' })));
+  wrap.appendChild(card);
+
+  const listCard = el('div', { class: 'card', style: 'margin-top: 16px;' }, el('h3', {}, 'Historique'));
+  const arr = [...state.weight].sort((a, b) => b.date.localeCompare(a.date));
+  if (!arr.length) listCard.appendChild(emptyState('Aucune pesée', 'Ajoute ta première pesée.'));
+  arr.forEach(w => listCard.appendChild(el('div', { class: 'list-item' },
+    el('div', {}, el('div', { class: 'title' }, `${w.value} kg`), el('div', { class: 'meta' }, fmtDate(w.date))),
+    el('button', { class: 'icon-btn danger', onClick: () => {
+      state.weight = state.weight.filter(x => x.id !== w.id);
+      save(); navigate('weight'); toast('Entrée supprimée');
+    } }, '✕'),
+  )));
+  wrap.appendChild(listCard);
+
+  setTimeout(() => {
+    if (!state.weight.length) return;
+    const sorted = [...state.weight].sort((a, b) => a.date.localeCompare(b.date));
+    chart($('#w-chart').getContext('2d'), {
+      type: 'line',
+      data: {
+        labels: sorted.map(w => shortDate(w.date)),
+        datasets: [{ label: 'Poids', data: sorted.map(w => w.value),
+          borderColor: chartTheme.accent, backgroundColor: 'rgba(255,91,46,0.15)', fill: true, tension: 0.35, pointRadius: 4 }],
+      },
+      options: { responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { display: false } }, scales: baseScales('kg') }
+    });
+  }, 0);
+  return wrap;
+};
+
+// ---------- Course ----------
+
+views.runs = () => {
+  const wrap = el('div');
+  wrap.appendChild(viewHeader('Course à pied', 'Distances, durées et allures de tes sorties.',
+    el('button', { class: 'btn', onClick: () => openRunForm() }, '+ Nouvelle sortie')));
+
+  const card = el('div', { class: 'card' }, el('h3', {}, 'Distances parcourues'),
+    el('div', { class: 'chart-wrap tall' }, el('canvas', { id: 'r-chart' })));
+  wrap.appendChild(card);
+
+  const list = el('div', { class: 'card', style: 'margin-top: 16px;' }, el('h3', {}, 'Sorties'));
+  const arr = [...state.runs].sort((a, b) => b.date.localeCompare(a.date));
+  if (!arr.length) list.appendChild(emptyState('Aucune sortie', 'Ajoute ta première sortie.'));
+  arr.forEach(r => {
+    const pace = r.distance ? (r.duration / r.distance).toFixed(2) : '—';
+    list.appendChild(el('div', { class: 'list-item' },
+      el('div', {},
+        el('div', { class: 'title' }, `${r.distance} km en ${r.duration} min`),
+        el('div', { class: 'meta' }, `${fmtDate(r.date)} · allure ${pace} min/km${r.notes ? ' · ' + r.notes : ''}`),
+      ),
+      el('button', { class: 'icon-btn danger', onClick: () => {
+        state.runs = state.runs.filter(x => x.id !== r.id);
+        save(); navigate('runs');
+      } }, '✕'),
+    ));
+  });
+  wrap.appendChild(list);
+
+  setTimeout(() => {
+    if (!state.runs.length) return;
+    const sorted = [...state.runs].sort((a, b) => a.date.localeCompare(b.date));
+    chart($('#r-chart').getContext('2d'), {
+      type: 'bar',
+      data: {
+        labels: sorted.map(r => shortDate(r.date)),
+        datasets: [{ label: 'Distance (km)', data: sorted.map(r => r.distance), backgroundColor: chartTheme.info }],
+      },
+      options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: baseScales('km') }
+    });
+  }, 0);
+  return wrap;
+};
+
+function openRunForm() {
+  openModal('Nouvelle sortie', (close) => {
+    const form = el('form', { class: 'form', onSubmit: (e) => {
+      e.preventDefault();
+      const d = Object.fromEntries(new FormData(e.target));
+      state.runs.push({ id: id(), date: d.date, distance: +d.distance, duration: +d.duration, notes: d.notes.trim() });
+      save(); close(); navigate('runs'); toast('Sortie ajoutée');
+    } });
+    form.innerHTML = `
+      <div class="form-row">
+        <div><label>Date</label><input type="date" name="date" value="${today()}" required></div>
+        <div><label>Distance (km)</label><input type="number" step="0.1" name="distance" required></div>
+      </div>
+      <div><label>Durée (min)</label><input type="number" step="0.1" name="duration" required></div>
+      <div><label>Notes</label><textarea name="notes" placeholder="ressenti, parcours…"></textarea></div>
+      <div class="form-actions">
+        <button type="button" class="btn secondary">Annuler</button>
+        <button type="submit" class="btn">Enregistrer</button>
+      </div>
+    `;
+    form.querySelector('button[type=button]').onclick = close;
+    return form;
+  });
+}
+
+// ---------- Musculation ----------
+
+views.lifts = () => {
+  const wrap = el('div');
+  wrap.appendChild(viewHeader('Musculation', 'Historique des séances et progression des charges.',
+    el('button', { class: 'btn', onClick: () => openLiftForm() }, '+ Nouvelle séance')));
+
+  const exercises = [...new Set(state.lifts.map(l => l.exercise))];
+  const card = el('div', { class: 'card' }, el('h3', {}, 'Charges max par exercice'),
+    el('div', { class: 'chart-wrap tall' }, el('canvas', { id: 'l-chart' })));
+  wrap.appendChild(card);
+
+  const list = el('div', { class: 'card', style: 'margin-top: 16px;' }, el('h3', {}, 'Historique'));
+  const arr = [...state.lifts].sort((a, b) => b.date.localeCompare(a.date));
+  if (!arr.length) list.appendChild(emptyState('Aucune séance', 'Ajoute ta première séance.'));
+  arr.forEach(l => list.appendChild(el('div', { class: 'list-item' },
+    el('div', {},
+      el('div', { class: 'title' }, `${l.exercise} — ${l.weight} kg`),
+      el('div', { class: 'meta' }, `${fmtDate(l.date)} · ${l.sets} × ${l.reps} reps`),
+    ),
+    el('button', { class: 'icon-btn danger', onClick: () => {
+      state.lifts = state.lifts.filter(x => x.id !== l.id);
+      save(); navigate('lifts');
+    } }, '✕'),
+  )));
+  wrap.appendChild(list);
+
+  setTimeout(() => {
+    if (!exercises.length) return;
+    const palette = [chartTheme.accent, chartTheme.info, chartTheme.success, chartTheme.accent2, '#ad6cff'];
+    const allDates = [...new Set(state.lifts.map(l => l.date))].sort();
+    const labels = allDates.map(d => shortDate(d));
+    const datasets = exercises.map((ex, i) => {
+      const byDate = Object.fromEntries(
+        state.lifts.filter(l => l.exercise === ex).map(l => [l.date, l.weight])
+      );
+      return {
+        label: ex,
+        data: allDates.map(d => byDate[d] ?? null),
+        borderColor: palette[i % palette.length],
+        backgroundColor: palette[i % palette.length],
+        tension: 0.3,
+        pointRadius: 4,
+        fill: false,
+        spanGaps: true,
+      };
+    });
+    chart($('#l-chart').getContext('2d'), {
+      type: 'line',
+      data: { labels, datasets },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { position: 'bottom', labels: { color: chartTheme.text } } },
+        scales: baseScales('kg'),
+      },
+    });
+  }, 0);
+  return wrap;
+};
+
+function openLiftForm() {
+  openModal('Nouvelle séance', (close) => {
+    const form = el('form', { class: 'form', onSubmit: (e) => {
+      e.preventDefault();
+      const d = Object.fromEntries(new FormData(e.target));
+      state.lifts.push({ id: id(), date: d.date, exercise: d.exercise.trim(), weight: +d.weight, reps: +d.reps, sets: +d.sets });
+      save(); close(); navigate('lifts'); toast('Séance ajoutée');
+    } });
+    form.innerHTML = `
+      <div class="form-row">
+        <div><label>Date</label><input type="date" name="date" value="${today()}" required></div>
+        <div><label>Exercice</label><input type="text" name="exercise" placeholder="Squat, Bench…" required></div>
+      </div>
+      <div class="form-row">
+        <div><label>Charge (kg)</label><input type="number" step="0.5" name="weight" required></div>
+        <div><label>Reps</label><input type="number" name="reps" value="5" required></div>
+      </div>
+      <div><label>Séries</label><input type="number" name="sets" value="4" required></div>
+      <div class="form-actions">
+        <button type="button" class="btn secondary">Annuler</button>
+        <button type="submit" class="btn">Enregistrer</button>
+      </div>
+    `;
+    form.querySelector('button[type=button]').onclick = close;
+    return form;
+  });
+}
+
+// ---------- Mensurations ----------
+
+const BODY_SVG = `
+<svg viewBox="0 0 320 500" role="img" aria-label="Schéma des points de mensuration">
+  <defs>
+    <linearGradient id="bodyGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#26303f"/>
+      <stop offset="1" stop-color="#1b2330"/>
+    </linearGradient>
+  </defs>
+  <g fill="url(#bodyGrad)">
+    <circle cx="160" cy="46" r="26"/>
+    <rect x="150" y="68" width="20" height="18" rx="8"/>
+    <rect x="112" y="92" width="96" height="74" rx="30"/>
+    <rect x="126" y="150" width="68" height="66" rx="24"/>
+    <rect x="116" y="196" width="88" height="54" rx="26"/>
+    <rect x="80" y="100" width="26" height="122" rx="13"/>
+    <rect x="214" y="100" width="26" height="122" rx="13"/>
+    <rect x="124" y="238" width="30" height="214" rx="15"/>
+    <rect x="166" y="238" width="30" height="214" rx="15"/>
+  </g>
+  <g stroke="#ff5b2e" stroke-width="2" fill="none" stroke-dasharray="5 4" stroke-linecap="round">
+    <line x1="104" y1="120" x2="216" y2="120"/>
+    <line x1="112" y1="182" x2="208" y2="182"/>
+    <ellipse cx="93" cy="150" rx="20" ry="11"/>
+    <ellipse cx="139" cy="300" rx="22" ry="12"/>
+  </g>
+  <g stroke="#ff5b2e" stroke-width="1.5">
+    <line x1="216" y1="120" x2="244" y2="120"/>
+    <line x1="208" y1="182" x2="244" y2="182"/>
+    <line x1="73" y1="150" x2="52" y2="150"/>
+    <line x1="117" y1="300" x2="60" y2="300"/>
+  </g>
+  <g fill="#ff5b2e">
+    <circle cx="244" cy="120" r="2.5"/>
+    <circle cx="244" cy="182" r="2.5"/>
+    <circle cx="52" cy="150" r="2.5"/>
+    <circle cx="60" cy="300" r="2.5"/>
+  </g>
+  <g fill="#e6edf6" font-family="Inter, sans-serif" font-size="13" font-weight="600">
+    <text x="250" y="124">Poitrine</text>
+    <text x="250" y="186">Taille</text>
+    <text x="46" y="154" text-anchor="end">Bras</text>
+    <text x="54" y="304" text-anchor="end">Cuisse</text>
+  </g>
+</svg>`;
+
+views.measurements = () => {
+  const wrap = el('div');
+  wrap.appendChild(viewHeader('Mensurations', 'Mesure-toi régulièrement aux bons endroits pour suivre ta transformation.',
+    el('button', { class: 'btn', onClick: () => openMeasurementForm() }, '+ Nouvelle mesure')));
+
+  const grid = el('div', { class: 'grid cols-2 measure-grid' });
+
+  const diagram = el('div', { class: 'card body-diagram-card' },
+    el('h3', {}, 'Où prendre les mesures'),
+    el('div', { class: 'body-diagram', html: BODY_SVG }),
+    el('p', { class: 'diagram-hint' },
+      'Poitrine : au niveau le plus fort. Bras : biceps contracté. Taille : au plus étroit, au-dessus du nombril. Cuisse : au plus large. Mesure toujours au même endroit, le matin, sans serrer le mètre.'),
+  );
+
+  const chartCard = el('div', { class: 'card' }, el('h3', {}, 'Évolution des mensurations (cm)'),
+    el('div', { class: 'chart-wrap tall' }, el('canvas', { id: 'm-chart' })));
+
+  grid.appendChild(diagram);
+  grid.appendChild(chartCard);
+  wrap.appendChild(grid);
+
+  const list = el('div', { class: 'card', style: 'margin-top: 16px;' }, el('h3', {}, 'Historique'));
+  const arr = [...state.measurements].sort((a, b) => b.date.localeCompare(a.date));
+  if (!arr.length) list.appendChild(emptyState('Aucune mesure', 'Ajoute ta première série de mesures.'));
+  arr.forEach(m => list.appendChild(el('div', { class: 'list-item' },
+    el('div', {},
+      el('div', { class: 'title' }, fmtDate(m.date)),
+      el('div', { class: 'meta' }, `Poitrine ${m.chest || '—'} cm · Bras ${m.arm || '—'} cm · Taille ${m.waist || '—'} cm · Cuisse ${m.thigh || '—'} cm`),
+    ),
+    el('button', { class: 'icon-btn danger', onClick: () => {
+      state.measurements = state.measurements.filter(x => x.id !== m.id);
+      save(); navigate('measurements');
+    } }, '✕'),
+  )));
+  wrap.appendChild(list);
+
+  setTimeout(() => {
+    const arr = [...state.measurements].sort((a, b) => a.date.localeCompare(b.date));
+    if (!arr.length) return;
+    const labels = arr.map(m => shortDate(m.date));
+    const mkSet = (label, key, color) => ({ label, data: arr.map(m => m[key]), borderColor: color, backgroundColor: color, tension: 0.3, fill: false, pointRadius: 4, spanGaps: true });
+    chart($('#m-chart').getContext('2d'), {
+      type: 'line',
+      data: { labels, datasets: [
+        mkSet('Poitrine', 'chest', chartTheme.accent2),
+        mkSet('Bras', 'arm', chartTheme.info),
+        mkSet('Taille', 'waist', chartTheme.accent),
+        mkSet('Cuisse', 'thigh', chartTheme.success),
+      ] },
+      options: { responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { position: 'bottom', labels: { color: chartTheme.text } } },
+        scales: baseScales('cm') }
+    });
+  }, 0);
+  return wrap;
+};
+
+function openMeasurementForm() {
+  openModal('Nouvelle mesure', (close) => {
+    const form = el('form', { class: 'form', onSubmit: (e) => {
+      e.preventDefault();
+      const d = Object.fromEntries(new FormData(e.target));
+      state.measurements.push({
+        id: id(), date: d.date,
+        chest: d.chest ? +d.chest : null,
+        arm: d.arm ? +d.arm : null,
+        waist: d.waist ? +d.waist : null,
+        thigh: d.thigh ? +d.thigh : null,
+      });
+      save(); close(); navigate('measurements'); toast('Mesure ajoutée');
+    } });
+    form.innerHTML = `
+      <div><label>Date</label><input type="date" name="date" value="${today()}" required></div>
+      <div class="form-row">
+        <div><label>Poitrine (cm)</label><input type="number" step="0.5" name="chest"></div>
+        <div><label>Bras (cm)</label><input type="number" step="0.5" name="arm"></div>
+      </div>
+      <div class="form-row">
+        <div><label>Tour de taille (cm)</label><input type="number" step="0.5" name="waist"></div>
+        <div><label>Cuisse (cm)</label><input type="number" step="0.5" name="thigh"></div>
+      </div>
+      <div class="form-actions">
+        <button type="button" class="btn secondary">Annuler</button>
+        <button type="submit" class="btn">Enregistrer</button>
+      </div>
+    `;
+    form.querySelector('button[type=button]').onclick = close;
+    return form;
+  });
+}
+
+// ---------- Photos ----------
+
+views.photos = () => {
+  const wrap = el('div');
+  wrap.appendChild(viewHeader('Photos', 'Avant / après — documente ta transformation visuellement.',
+    el('label', { class: 'btn', style: 'cursor: pointer;' }, '+ Ajouter une photo',
+      el('input', { type: 'file', accept: 'image/*', hidden: '', onChange: (e) => addPhoto(e.target.files[0]) }))));
+
+  const card = el('div', { class: 'card' });
+  const photos = [...state.photos].sort((a, b) => b.date.localeCompare(a.date));
+  if (!photos.length) {
+    card.appendChild(emptyState('Aucune photo', 'Ajoute une première photo pour démarrer ton suivi.'));
+  } else {
+    const grid = el('div', { class: 'photo-grid' });
+    photos.forEach(p => {
+      grid.appendChild(el('div', { class: 'photo-card' },
+        el('img', { src: p.data, alt: p.label }),
+        el('div', { class: 'photo-meta' },
+          el('div', {},
+            el('div', { style: 'font-weight: 600;' }, p.label || fmtDate(p.date)),
+            el('div', { style: 'color: var(--text-dim); font-size: 11px;' }, fmtDate(p.date)),
+          ),
+          el('button', { class: 'icon-btn danger', onClick: () => {
+            state.photos = state.photos.filter(x => x.id !== p.id);
+            save(); navigate('photos');
+          } }, '✕'),
+        ),
+      ));
+    });
+    card.appendChild(grid);
+  }
+  wrap.appendChild(card);
+  return wrap;
+};
+
+function addPhoto(file) {
+  if (!file) return;
+  if (file.size > 3_000_000) { toast('Image trop grande (max 3 MB)'); return; }
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    const label = prompt('Légende (facultatif) :') || '';
+    state.photos.push({
+      id: id(),
+      date: today(),
+      label, data: e.target.result,
+    });
+    if (!save()) { state.photos.pop(); return; }
+    navigate('photos'); toast('Photo ajoutée');
+  };
+  reader.readAsDataURL(file);
+}
+
+// ---------- Vidéos ----------
+
+function parseVideo(url) {
+  if (!url) return { type: 'none', src: '' };
+  if (url.startsWith('data:video') || url.startsWith('blob:')) return { type: 'file', src: url };
+  let m = url.match(/(?:youtube\.com\/(?:watch\?v=|shorts\/|embed\/)|youtu\.be\/)([\w-]{6,})/);
+  if (m) return { type: 'youtube', embed: `https://www.youtube.com/embed/${m[1]}` };
+  m = url.match(/vimeo\.com\/(?:video\/)?(\d+)/);
+  if (m) return { type: 'vimeo', embed: `https://player.vimeo.com/video/${m[1]}` };
+  if (/\.(mp4|webm|ogg|mov|m4v)(\?.*)?$/i.test(url)) return { type: 'file', src: url };
+  return { type: 'link', src: url };
+}
+
+function videoEmbed(v) {
+  // Vidéo fichier dans IndexedDB : on insère un placeholder puis on injecte la vraie src
+  if (v.blobKey) {
+    const video = el('video', { controls: '', preload: 'metadata' });
+    getVideoBlobUrl(v.blobKey).then((url) => {
+      if (url) video.src = url;
+      else video.replaceWith(el('div', { class: 'video-fallback' }, 'Vidéo introuvable (cache vidé ?)'));
+    });
+    return video;
+  }
+  const p = parseVideo(v.data || v.url || '');
+  if (p.type === 'youtube' || p.type === 'vimeo') {
+    return el('iframe', { src: p.embed, loading: 'lazy',
+      allow: 'accelerometer; clipboard-write; encrypted-media; gyroscope; picture-in-picture; fullscreen',
+      allowfullscreen: '' });
+  }
+  if (p.type === 'file') {
+    return el('video', { src: p.src, controls: '', preload: 'metadata' });
+  }
+  if (p.type === 'link') {
+    return el('a', { class: 'video-fallback', href: p.src, target: '_blank', rel: 'noopener' }, '▶ Ouvrir la vidéo');
+  }
+  return el('div', { class: 'video-fallback' }, 'Vidéo indisponible');
+}
+
+views.videos = () => {
+  const wrap = el('div');
+  wrap.appendChild(viewHeader('Vidéos', 'Garde tes vidéos datées pour visionner ta progression dans le temps.',
+    el('button', { class: 'btn', onClick: () => openVideoForm() }, '+ Ajouter une vidéo')));
+
+  const card = el('div', { class: 'card' });
+  const arr = [...state.videos].sort((a, b) => b.date.localeCompare(a.date));
+  if (!arr.length) {
+    card.appendChild(emptyState('Aucune vidéo', 'Ajoute un lien (YouTube, Vimeo, Drive…) ou un fichier court pour suivre ta progression.'));
+  } else {
+    const grid = el('div', { class: 'video-grid' });
+    arr.forEach(v => grid.appendChild(videoCard(v)));
+    card.appendChild(grid);
+  }
+  wrap.appendChild(card);
+  return wrap;
+};
+
+function videoCard(v) {
+  return el('div', { class: 'video-card' },
+    el('div', { class: 'video-embed' }, videoEmbed(v)),
+    el('div', { class: 'video-info' },
+      el('div', { class: 'video-head' },
+        el('div', {},
+          el('div', { class: 'video-date' }, fmtDate(v.date)),
+          v.title ? el('div', { class: 'video-title' }, v.title) : null,
+        ),
+        el('button', { class: 'icon-btn danger', onClick: async () => {
+          if (v.blobKey) { try { await idbDel(STORE_BLOBS, v.blobKey); } catch {} }
+          state.videos = state.videos.filter(x => x.id !== v.id); save(); navigate('videos'); toast('Vidéo supprimée');
+        } }, '✕'),
+      ),
+      v.notes ? el('div', { class: 'video-notes' }, v.notes) : null,
+    ),
+  );
+}
+
+function openVideoForm() {
+  openModal('Ajouter une vidéo', (close) => {
+    let pendingFile = null;
+    const form = el('form', { class: 'form', onSubmit: async (e) => {
+      e.preventDefault();
+      const d = Object.fromEntries(new FormData(e.target));
+      const url = (d.url || '').trim();
+      if (!url && !pendingFile) { toast('Ajoute un lien ou un fichier vidéo.'); return; }
+      const entry = { id: id(), date: d.date, title: (d.title || '').trim(), url, notes: (d.notes || '').trim() };
+      if (pendingFile) {
+        const key = 'video-' + entry.id;
+        try {
+          await idbPut(STORE_BLOBS, key, pendingFile);
+          entry.blobKey = key;
+          entry.size = pendingFile.size;
+          entry.mime = pendingFile.type;
+        } catch (err) {
+          toast('Stockage refusé par le navigateur : ' + (err?.message || err));
+          return;
+        }
+      }
+      state.videos.push(entry);
+      if (!save()) {
+        state.videos.pop();
+        if (entry.blobKey) { try { await idbDel(STORE_BLOBS, entry.blobKey); } catch {} }
+        return;
+      }
+      close(); navigate('videos'); toast('Vidéo ajoutée');
+    } });
+    form.innerHTML = `
+      <div class="form-row">
+        <div><label>Date</label><input type="date" name="date" value="${today()}" required></div>
+        <div><label>Titre</label><input type="text" name="title" placeholder="ex : Service revers, semaine 3"></div>
+      </div>
+      <div><label>Lien vidéo</label><input type="url" name="url" placeholder="https://youtube.com/… ou Vimeo, Drive…"></div>
+      <div><label>… ou importer un fichier vidéo</label><input type="file" accept="video/*" name="file"></div>
+      <p class="form-hint file-hint">Stockage local jusqu'à ~500 Mo par fichier. Au-delà, préfère un lien (YouTube, Vimeo, Drive).</p>
+      <div><label>Notes</label><textarea name="notes" placeholder="Ce que tu observes, axes de travail…"></textarea></div>
+      <div class="form-actions">
+        <button type="button" class="btn secondary">Annuler</button>
+        <button type="submit" class="btn">Enregistrer</button>
+      </div>
+    `;
+    const fileInput = form.querySelector('input[type=file]');
+    const hint = form.querySelector('.file-hint');
+    fileInput.addEventListener('change', (e) => {
+      const f = e.target.files[0];
+      if (!f) { pendingFile = null; hint.textContent = 'Stockage local jusqu\'à ~500 Mo par fichier. Au-delà, préfère un lien.'; return; }
+      if (f.size > 500_000_000) {
+        toast('Fichier trop lourd (max 500 Mo). Préfère un lien.');
+        fileInput.value = ''; pendingFile = null; return;
+      }
+      pendingFile = f;
+      hint.textContent = `📦 ${f.name} — ${(f.size / 1_000_000).toFixed(1)} Mo, sera stocké dans IndexedDB (hors-ligne).`;
+    });
+    form.querySelector('button[type=button]').onclick = close;
+    return form;
+  });
+}
+
+// ---------- Saisie simple générique ----------
+
+function simpleEntryForm(category, opts) {
+  openModal('Nouvelle entrée', (close) => {
+    const form = el('form', { class: 'form', onSubmit: (e) => {
+      e.preventDefault();
+      const d = Object.fromEntries(new FormData(e.target));
+      state[category].push({ id: id(), date: d.date, [opts.field]: +d[opts.field] });
+      save(); close(); navigate(category); toast('Entrée ajoutée');
+    } });
+    form.innerHTML = `
+      <div class="form-row">
+        <div><label>Date</label><input type="date" name="date" value="${today()}" required></div>
+        <div><label>${opts.label}</label><input type="${opts.type}" step="${opts.step || '1'}" name="${opts.field}" required></div>
+      </div>
+      <div class="form-actions">
+        <button type="button" class="btn secondary">Annuler</button>
+        <button type="submit" class="btn">Enregistrer</button>
+      </div>
+    `;
+    form.querySelector('button[type=button]').onclick = close;
+    return form;
+  });
+}
+
+// ---------- Goals ----------
+
+views.goals = () => {
+  const wrap = el('div');
+  wrap.appendChild(viewHeader('Objectifs', 'Définis tes objectifs datés et suis ta progression.',
+    el('button', { class: 'btn', onClick: () => openGoalForm() }, '+ Nouvel objectif')));
+
+  const active = state.goals.filter(g => !g.done);
+  const done = state.goals.filter(g => g.done);
+
+  const card1 = el('div', { class: 'card' }, el('h3', {}, 'En cours'));
+  if (!active.length) card1.appendChild(emptyState('Aucun objectif actif', ''));
+  active.forEach(g => card1.appendChild(goalRow(g, true)));
+  wrap.appendChild(card1);
+
+  if (done.length) {
+    const card2 = el('div', { class: 'card', style: 'margin-top: 16px;' }, el('h3', {}, 'Terminés'));
+    done.forEach(g => card2.appendChild(goalRow(g, true)));
+    wrap.appendChild(card2);
+  }
+
+  return wrap;
+};
+
+const GOAL_METRICS = {
+  manual:   { label: 'Manuel (je gère le %)', unit: '' },
+  weight:   { label: 'Poids cible', unit: 'kg', hint: 'La progression se calcule depuis ton poids de départ jusqu\'à la cible.' },
+  distance: { label: 'Distance de course cumulée', unit: 'km', hint: 'Cumul des kilomètres courus à partir de la création de l\'objectif.' },
+  lift:     { label: 'Charge max (muscu)', unit: 'kg', hint: 'Plus haute charge enregistrée pour l\'exercice indiqué.' },
+  sobriety: { label: 'Jours sains (sobriété)', unit: 'jours', hint: 'Nombre de jours sans écart enregistrés à partir de la création.' },
+  mobility: { label: 'Séances de mobilité', unit: 'séances', hint: 'Nombre de séances de mobilité à partir de la création.' },
+};
+
+function clampPct(p) { return Math.max(0, Math.min(100, Math.round(p))); }
+
+// Calcule la progression réelle d'un objectif à partir des données de l'app
+function computeGoalProgress(g) {
+  const metric = g.metric || 'manual';
+  if (metric === 'manual') {
+    const pct = clampPct(g.progress || 0);
+    return { pct, detail: `${pct} %`, auto: false };
+  }
+  const start = g.start || g.deadline;
+  const unit = GOAL_METRICS[metric]?.unit || '';
+  const count = (current, target) => {
+    const c = Math.round(current * 10) / 10;
+    return { pct: target > 0 ? clampPct((current / target) * 100) : 0, detail: `${c} / ${target} ${unit}`, auto: true };
+  };
+  if (metric === 'weight') {
+    if (!state.weight.length) return { pct: 0, detail: `— / ${g.target} kg`, auto: true };
+    const current = state.weight.at(-1).value;
+    const base = g.baseline ?? state.weight[0].value;
+    const target = g.target;
+    const pct = base === target ? 100 : clampPct(((base - current) / (base - target)) * 100);
+    return { pct, detail: `${current} / ${target} kg`, auto: true };
+  }
+  if (metric === 'distance') return count(state.runs.filter(r => r.date >= start).reduce((s, r) => s + (r.distance || 0), 0), g.target);
+  if (metric === 'lift') {
+    const ex = (g.exercise || '').toLowerCase();
+    const max = state.lifts.filter(l => !ex || (l.exercise || '').toLowerCase().includes(ex)).reduce((m, l) => Math.max(m, l.weight || 0), 0);
+    return count(max, g.target);
+  }
+  if (metric === 'sobriety') return count(state.sobriety.filter(s => !s.hasSlip && s.date >= start).length, g.target);
+  if (metric === 'mobility') return count(state.mobility.filter(m => m.date >= start).length, g.target);
+  return { pct: 0, detail: '', auto: true };
+}
+
+function goalRow(g, withControls) {
+  const daysLeft = Math.ceil((new Date(g.deadline) - new Date()) / 86400000);
+  const prog = computeGoalProgress(g);
+  const pct = g.done ? 100 : prog.pct;
+  const reached = !g.done && pct >= 100;
+  const wrap = el('div', { class: 'list-item', style: 'flex-direction: column; align-items: stretch; gap: 8px;' });
+  const head = el('div', { style: 'display: flex; justify-content: space-between; gap: 12px; align-items: center;' },
+    el('div', {},
+      el('div', { class: 'title', style: g.done ? 'text-decoration: line-through; color: var(--text-dim);' : '' },
+        g.title,
+        prog.auto ? el('span', { class: 'goal-tag' }, GOAL_METRICS[g.metric]?.unit ? `auto · ${GOAL_METRICS[g.metric].label}` : 'auto') : null,
+      ),
+      el('div', { class: 'meta' },
+        `Échéance : ${fmtDate(g.deadline)} · ${g.done ? 'Atteint ✓' : (reached ? 'Objectif atteint 🎉' : (daysLeft >= 0 ? `${daysLeft} jours restants` : `En retard de ${-daysLeft} jours`))}`),
+    ),
+    withControls ? el('div', { class: 'actions' },
+      el('button', { class: 'icon-btn', title: 'Archiver / réactiver', onClick: () => {
+        g.done = !g.done; if (g.done && (!g.metric || g.metric === 'manual')) g.progress = 100;
+        save(); navigate('goals'); toast(g.done ? 'Objectif archivé !' : 'Objectif réactivé');
+      } }, g.done ? '↺' : '✓'),
+      el('button', { class: 'icon-btn', onClick: () => openGoalForm(g) }, '✎'),
+      el('button', { class: 'icon-btn danger', onClick: () => confirmAction('Supprimer cet objectif ?', () => {
+        state.goals = state.goals.filter(x => x.id !== g.id); save(); navigate('goals');
+      }) }, '✕'),
+    ) : null,
+  );
+  wrap.appendChild(head);
+  const bar = el('div', { class: 'progress' }, el('div', { class: `progress-fill ${reached ? 'full' : ''}`, style: `width: ${pct}%` }));
+  wrap.appendChild(bar);
+  wrap.appendChild(el('div', { style: 'font-size: 11px; color: var(--text-dim); display: flex; justify-content: space-between;' },
+    el('span', {}, `Progression : ${pct} %`),
+    el('span', {}, prog.detail),
+  ));
+  return wrap;
+}
+
+function openGoalForm(existing) {
+  const g = existing || { title: '', deadline: '', progress: 0, done: false, metric: 'manual', target: '', exercise: '' };
+  openModal(existing ? 'Modifier l\'objectif' : 'Nouvel objectif', (close) => {
+    const form = el('form', { class: 'form', onSubmit: (e) => {
+      e.preventDefault();
+      const d = Object.fromEntries(new FormData(e.target));
+      const metric = d.metric || 'manual';
+      const entry = { id: existing?.id || id(), title: d.title.trim(), deadline: d.deadline, done: existing?.done || false, metric };
+      if (metric === 'manual') {
+        entry.progress = +d.progress || 0;
+      } else {
+        entry.target = +d.target || 0;
+        entry.start = existing?.start || today();
+        if (metric === 'lift') entry.exercise = (d.exercise || '').trim();
+        if (metric === 'weight') entry.baseline = existing?.baseline ?? (state.weight.at(-1)?.value ?? entry.target);
+      }
+      if (existing) state.goals = state.goals.map(x => x.id === entry.id ? entry : x);
+      else state.goals.push(entry);
+      save(); close(); navigate('goals'); toast(existing ? 'Objectif mis à jour' : 'Objectif créé');
+    } });
+    const opts = Object.entries(GOAL_METRICS).map(([k, v]) =>
+      `<option value="${k}"${(g.metric || 'manual') === k ? ' selected' : ''}>${v.label}</option>`).join('');
+    form.innerHTML = `
+      <div><label>Titre</label><input type="text" name="title" value="${(g.title || '').replace(/"/g, '&quot;')}" placeholder="Ex : Atteindre 75 kg" required></div>
+      <div><label>Type de suivi</label><select name="metric">${opts}</select></div>
+      <div class="goal-manual"${(g.metric || 'manual') !== 'manual' ? ' hidden' : ''}>
+        <label>Progression (%)</label><input type="number" min="0" max="100" name="progress" value="${g.progress || 0}">
+      </div>
+      <div class="goal-auto form-row"${(g.metric || 'manual') === 'manual' ? ' hidden' : ''}>
+        <div><label>Cible</label><input type="number" step="0.1" name="target" value="${g.target ?? ''}" placeholder="Valeur à atteindre"></div>
+        <div class="goal-exercise"${g.metric !== 'lift' ? ' hidden' : ''}><label>Exercice</label><input type="text" name="exercise" value="${(g.exercise || '').replace(/"/g, '&quot;')}" placeholder="Ex : Squat"></div>
+      </div>
+      <p class="form-hint goal-hint"></p>
+      <div><label>Échéance</label><input type="date" name="deadline" value="${g.deadline || ''}" required></div>
+      <div class="form-actions">
+        <button type="button" class="btn secondary">Annuler</button>
+        <button type="submit" class="btn">Enregistrer</button>
+      </div>
+    `;
+    const sel = form.querySelector('select[name=metric]');
+    const manual = form.querySelector('.goal-manual');
+    const auto = form.querySelector('.goal-auto');
+    const exo = form.querySelector('.goal-exercise');
+    const hint = form.querySelector('.goal-hint');
+    const targetInput = form.querySelector('input[name=target]');
+    const sync = () => {
+      const m = sel.value;
+      manual.hidden = m !== 'manual';
+      auto.hidden = m === 'manual';
+      exo.hidden = m !== 'lift';
+      hint.textContent = GOAL_METRICS[m]?.hint || '';
+      const u = GOAL_METRICS[m]?.unit;
+      if (u) targetInput.placeholder = `Cible en ${u}`;
+    };
+    sel.addEventListener('change', sync);
+    sync();
+    form.querySelector('button[type=button]').onclick = close;
+    return form;
+  });
+}
+
+// ---------- Recovery ----------
+
+views.recovery = () => {
+  const wrap = el('div');
+  wrap.appendChild(viewHeader('Récupération', 'Garde un œil sur ta fatigue et tes douleurs pour ne pas te cramer.',
+    el('button', { class: 'btn', onClick: () => openRecoveryForm() }, '+ Nouvelle entrée')));
+
+  const arr = [...state.recovery].sort((a, b) => a.date.localeCompare(b.date));
+  const last = arr.at(-1);
+
+  if (last) {
+    const kpis = el('div', { class: 'grid cols-3' });
+    kpis.appendChild(kpiCard('😮‍💨 Fatigue', `${last.fatigue}/5`, fmtDate(last.date), last.fatigue >= 4 ? 'danger' : 'success'));
+    kpis.appendChild(kpiCard('💢 Douleurs', `${last.pain}/5`, fmtDate(last.date), last.pain >= 4 ? 'danger' : 'success'));
+    kpis.appendChild(kpiCard('🗓️ Entrées', String(arr.length), 'au total'));
+    wrap.appendChild(kpis);
+    wrap.appendChild(el('div', { style: 'height: 16px;' }));
+  }
+
+  const chartCard = el('div', { class: 'card' }, el('h3', {}, 'Évolution sur la durée'),
+    el('div', { class: 'chart-wrap tall' }, el('canvas', { id: 'rec-chart' })));
+  wrap.appendChild(chartCard);
+
+  const list = el('div', { class: 'card', style: 'margin-top: 16px;' }, el('h3', {}, 'Journal'));
+  if (!arr.length) list.appendChild(emptyState('Aucune entrée', 'Commence ton journal de récupération.'));
+  [...arr].reverse().forEach(r => list.appendChild(el('div', { class: 'list-item' },
+    el('div', {},
+      el('div', { class: 'title' }, fmtDate(r.date)),
+      el('div', { class: 'meta' },
+        `Fatigue ${r.fatigue}/5 · Douleurs ${r.pain}/5${r.notes ? ' · ' + r.notes : ''}`),
+    ),
+    el('button', { class: 'icon-btn danger', onClick: () => {
+      state.recovery = state.recovery.filter(x => x.id !== r.id); save(); navigate('recovery');
+    } }, '✕'),
+  )));
+  wrap.appendChild(list);
+
+  setTimeout(() => {
+    if (!arr.length) return;
+    chart($('#rec-chart').getContext('2d'), {
+      type: 'line',
+      data: {
+        labels: arr.map(r => shortDate(r.date)),
+        datasets: [
+          { label: 'Fatigue', data: arr.map(r => r.fatigue), borderColor: chartTheme.accent, backgroundColor: 'rgba(255,91,46,0.15)', tension: 0.3, fill: true, pointRadius: 4 },
+          { label: 'Douleurs', data: arr.map(r => r.pain), borderColor: chartTheme.accent2, backgroundColor: chartTheme.accent2, tension: 0.3, fill: false, pointRadius: 4 },
+        ],
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { position: 'bottom', labels: { color: chartTheme.text } } },
+        scales: {
+          x: { ticks: { color: chartTheme.text }, grid: { color: chartTheme.grid } },
+          y: { min: 0, max: 5, ticks: { color: chartTheme.text, stepSize: 1 }, grid: { color: chartTheme.grid }, title: { display: true, text: '/5', color: chartTheme.text } },
+        },
+      },
+    });
+  }, 0);
+
+  return wrap;
+};
+
+function openRecoveryForm() {
+  openModal('Nouvelle entrée de récupération', (close) => {
+    const form = el('form', { class: 'form', onSubmit: (e) => {
+      e.preventDefault();
+      const d = Object.fromEntries(new FormData(e.target));
+      state.recovery.push({
+        id: id(), date: d.date,
+        fatigue: +d.fatigue, pain: +d.pain,
+        notes: (d.notes || '').trim(),
+      });
+      save(); close(); navigate('recovery'); toast('Entrée ajoutée');
+    } });
+    form.innerHTML = `
+      <div class="form-row">
+        <div><label>Date</label><input type="date" name="date" value="${today()}" required></div>
+        <div><label>Fatigue (/5)</label><input type="number" min="0" max="5" name="fatigue" value="2" required></div>
+      </div>
+      <div><label>Douleurs (/5)</label><input type="number" min="0" max="5" name="pain" value="1" required></div>
+      <div><label>Notes</label><textarea name="notes" placeholder="Zones tendues, ressenti…"></textarea></div>
+      <div class="form-actions">
+        <button type="button" class="btn secondary">Annuler</button>
+        <button type="submit" class="btn">Enregistrer</button>
+      </div>
+    `;
+    form.querySelector('button[type=button]').onclick = close;
+    return form;
+  });
+}
+
+// ---------- Mobilité ----------
+
+views.mobility = () => {
+  const wrap = el('div');
+  wrap.appendChild(viewHeader('Mobilité', 'Travaille ta souplesse et ton amplitude pour rester en forme et prévenir les blessures.',
+    el('button', { class: 'btn', onClick: () => openMobilityForm() }, '+ Nouvelle séance')));
+
+  const arr = [...state.mobility].sort((a, b) => a.date.localeCompare(b.date));
+  const last = arr.at(-1);
+  const totalMin = arr.reduce((s, m) => s + (m.duration || 0), 0);
+
+  if (arr.length) {
+    const kpis = el('div', { class: 'grid cols-3' });
+    kpis.appendChild(kpiCard('🧘 Séances', String(arr.length), 'au total'));
+    kpis.appendChild(kpiCard('⏱️ Temps cumulé', `${totalMin} min`, ''));
+    kpis.appendChild(kpiCard('📅 Dernière', last ? fmtDate(last.date) : '—', last ? `${last.duration} min` : ''));
+    wrap.appendChild(kpis);
+    wrap.appendChild(el('div', { style: 'height: 16px;' }));
+  }
+
+  const list = el('div', { class: 'card' }, el('h3', {}, 'Journal des séances'));
+  if (!arr.length) {
+    list.appendChild(emptyState('Aucune séance', 'Note ta première séance de mobilité (étirements, foam roller, yoga…).'));
+  } else {
+    [...arr].reverse().forEach(m => list.appendChild(el('div', { class: 'list-item' },
+      el('div', {},
+        el('div', { class: 'title' }, `${fmtDate(m.date)} · ${m.duration} min`),
+        el('div', { class: 'meta' },
+          `${m.focus || 'Mobilité générale'}${m.notes ? ' · ' + m.notes : ''}`),
+      ),
+      el('button', { class: 'icon-btn danger', onClick: () => {
+        state.mobility = state.mobility.filter(x => x.id !== m.id); save(); navigate('mobility');
+      } }, '✕'),
+    )));
+  }
+  wrap.appendChild(list);
+
+  return wrap;
+};
+
+function openMobilityForm() {
+  openModal('Nouvelle séance de mobilité', (close) => {
+    const form = el('form', { class: 'form', onSubmit: (e) => {
+      e.preventDefault();
+      const d = Object.fromEntries(new FormData(e.target));
+      state.mobility.push({
+        id: id(), date: d.date,
+        duration: +d.duration,
+        focus: (d.focus || '').trim(),
+        notes: (d.notes || '').trim(),
+      });
+      save(); close(); navigate('mobility'); toast('Séance ajoutée');
+    } });
+    form.innerHTML = `
+      <div class="form-row">
+        <div><label>Date</label><input type="date" name="date" value="${today()}" required></div>
+        <div><label>Durée (min)</label><input type="number" min="1" name="duration" value="15" required></div>
+      </div>
+      <div><label>Zones travaillées</label><input type="text" name="focus" placeholder="Hanches, épaules, ischios…"></div>
+      <div><label>Notes</label><textarea name="notes" placeholder="Ressenti, progression, exercices…"></textarea></div>
+      <div class="form-actions">
+        <button type="button" class="btn secondary">Annuler</button>
+        <button type="submit" class="btn">Enregistrer</button>
+      </div>
+    `;
+    form.querySelector('button[type=button]').onclick = close;
+    return form;
+  });
+}
+
+// ---------- Sobriété ----------
+
+let sobrietyMonth = null;
+
+views.sobriety = () => {
+  const wrap = el('div');
+  const now = new Date();
+  if (!sobrietyMonth) sobrietyMonth = { y: now.getFullYear(), m: now.getMonth() };
+
+  wrap.appendChild(viewHeader('Sobriété', 'Suis tes écarts au quotidien. Clique sur un jour pour saisir ton ressenti.'));
+
+  const arr = state.sobriety;
+  const clean = arr.filter(s => !s.hasSlip).length;
+  const slips = arr.filter(s => s.hasSlip).length;
+  const total = arr.length;
+  const cleanRate = total ? Math.round((clean / total) * 100) : 0;
+
+  const kpis = el('div', { class: 'grid cols-3' });
+  kpis.appendChild(kpiCard('🥗 Jours sains', String(clean), 'sans écart', 'success'));
+  kpis.appendChild(kpiCard('🍩 Écarts', String(slips), 'jours marqués', slips ? 'danger' : 'accent'));
+  kpis.appendChild(kpiCard('📈 Taux de sobriété', `${cleanRate}%`, `${total} jours suivis`, cleanRate >= 70 ? 'success' : 'accent'));
+  wrap.appendChild(kpis);
+  wrap.appendChild(el('div', { style: 'height: 16px;' }));
+
+  wrap.appendChild(sobrietyCalendar());
+
+  const slipList = state.sobriety.filter(s => s.hasSlip).sort((a, b) => b.date.localeCompare(a.date));
+  const list = el('div', { class: 'card', style: 'margin-top: 16px;' }, el('h3', {}, 'Derniers écarts'));
+  if (!slipList.length) {
+    list.appendChild(emptyState('Aucun écart enregistré', 'Continue comme ça 💪'));
+  } else {
+    slipList.slice(0, 10).forEach(s => list.appendChild(el('div', { class: 'list-item' },
+      el('div', {},
+        el('div', { class: 'title' }, `${fmtDate(s.date)} · ${s.what || 'Écart'}`),
+        s.why ? el('div', { class: 'meta' }, s.why) : null,
+      ),
+      el('button', { class: 'icon-btn danger', onClick: () => {
+        state.sobriety = state.sobriety.filter(x => x.id !== s.id); save(); navigate('sobriety');
+      } }, '✕'),
+    )));
+  }
+  wrap.appendChild(list);
+
+  return wrap;
+};
+
+function sobrietyCalendar() {
+  const { y, m } = sobrietyMonth;
+  const card = el('div', { class: 'card sobriety-cal' });
+
+  const monthLabel = new Date(y, m, 1).toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' });
+  const header = el('div', { class: 'cal-header' },
+    el('button', { class: 'icon-btn', onClick: () => { sobrietyMonth = shiftMonth(y, m, -1); navigate('sobriety'); } }, '‹'),
+    el('div', { class: 'cal-title' }, monthLabel.charAt(0).toUpperCase() + monthLabel.slice(1)),
+    el('button', { class: 'icon-btn', onClick: () => { sobrietyMonth = shiftMonth(y, m, 1); navigate('sobriety'); } }, '›'),
+  );
+  card.appendChild(header);
+
+  const weekdays = ['Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam', 'Dim'];
+  const dows = el('div', { class: 'cal-grid cal-dow' });
+  weekdays.forEach(d => dows.appendChild(el('div', { class: 'cal-dow-cell' }, d)));
+  card.appendChild(dows);
+
+  const grid = el('div', { class: 'cal-grid' });
+  const firstDay = new Date(y, m, 1);
+  const startOffset = (firstDay.getDay() + 6) % 7;
+  const daysInMonth = new Date(y, m + 1, 0).getDate();
+  const todayStr = today();
+
+  for (let i = 0; i < startOffset; i++) grid.appendChild(el('div', { class: 'cal-cell empty' }));
+
+  for (let day = 1; day <= daysInMonth; day++) {
+    const dateStr = `${y}-${String(m + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+    const entry = state.sobriety.find(s => s.date === dateStr);
+    const isFuture = dateStr > todayStr;
+    const isToday = dateStr === todayStr;
+
+    let cls = 'cal-cell';
+    if (entry) cls += entry.hasSlip ? ' slip' : ' clean';
+    if (isToday) cls += ' today';
+    if (isFuture) cls += ' future';
+
+    grid.appendChild(el('div', {
+      class: cls,
+      onClick: isFuture ? null : () => openSobrietyDay(dateStr),
+    },
+      el('div', { class: 'cal-day' }, String(day)),
+      entry ? el('div', { class: 'cal-dot' }) : null,
+    ));
+  }
+  card.appendChild(grid);
+
+  card.appendChild(el('div', { class: 'cal-legend' },
+    el('span', {}, el('span', { class: 'dot clean' }), 'Sain'),
+    el('span', {}, el('span', { class: 'dot slip' }), 'Écart'),
+    el('span', {}, el('span', { class: 'dot none' }), 'Non renseigné'),
+  ));
+
+  return card;
+}
+
+function shiftMonth(y, m, delta) {
+  const d = new Date(y, m + delta, 1);
+  return { y: d.getFullYear(), m: d.getMonth() };
+}
+
+function openSobrietyDay(dateStr) {
+  const existing = state.sobriety.find(s => s.date === dateStr);
+
+  openModal(fmtDate(dateStr), (close) => {
+    const wrap = el('div', { class: 'form' });
+    wrap.appendChild(el('p', { style: 'margin: 0 0 8px; font-size: 14px;' },
+      'As-tu fait un écart alimentaire ce jour ?'));
+
+    const setEntry = (hasSlip, what, why) => {
+      state.sobriety = state.sobriety.filter(s => s.date !== dateStr);
+      state.sobriety.push({ id: id(), date: dateStr, hasSlip, what: what || '', why: why || '' });
+      save(); close(); navigate('sobriety');
+      toast(hasSlip ? 'Écart noté' : 'Journée saine enregistrée');
+    };
+
+    const actions = el('div', { style: 'display: flex; gap: 8px;' },
+      el('button', { class: 'btn', style: 'flex:1; background: linear-gradient(135deg, #2ecc71, #27ae60); color: #0a1a0e;',
+        onClick: () => setEntry(false) }, '✅ Journée saine'),
+      el('button', { class: 'btn', style: 'flex:1; background: linear-gradient(135deg, #e74c3c, #c0392b); color: #1a0a0a;',
+        onClick: () => {
+          close();
+          openSobrietySlipForm(dateStr, existing);
+        } }, '⚠️ J\'ai fait un écart'),
+    );
+    wrap.appendChild(actions);
+
+    if (existing) {
+      wrap.appendChild(el('div', { class: 'form-hint' },
+        existing.hasSlip
+          ? `Déjà enregistré : écart — ${existing.what || '—'}${existing.why ? ' (' + existing.why + ')' : ''}`
+          : 'Déjà enregistré : journée saine'));
+      wrap.appendChild(el('button', { class: 'btn secondary', onClick: () => {
+        state.sobriety = state.sobriety.filter(s => s.date !== dateStr);
+        save(); close(); navigate('sobriety'); toast('Entrée supprimée');
+      } }, 'Effacer l\'entrée'));
+    }
+
+    return wrap;
+  });
+}
+
+function openSobrietySlipForm(dateStr, existing) {
+  openModal(`Écart du ${fmtDate(dateStr)}`, (close) => {
+    const form = el('form', { class: 'form', onSubmit: (e) => {
+      e.preventDefault();
+      const d = Object.fromEntries(new FormData(e.target));
+      state.sobriety = state.sobriety.filter(s => s.date !== dateStr);
+      state.sobriety.push({
+        id: id(), date: dateStr, hasSlip: true,
+        what: (d.what || '').trim(),
+        why: (d.why || '').trim(),
+      });
+      save(); close(); navigate('sobriety'); toast('Écart enregistré');
+    } });
+    const prevWhat = existing && existing.hasSlip ? existing.what || '' : '';
+    const prevWhy = existing && existing.hasSlip ? existing.why || '' : '';
+    form.innerHTML = `
+      <div><label>Quel écart ?</label><input type="text" name="what" value="${prevWhat.replace(/"/g, '&quot;')}" placeholder="Pizza, alcool, sucreries…" required></div>
+      <div><label>Pourquoi ?</label><textarea name="why" placeholder="Stress, sortie entre amis, fatigue…">${prevWhy}</textarea></div>
+      <div class="form-actions">
+        <button type="button" class="btn secondary">Annuler</button>
+        <button type="submit" class="btn">Enregistrer</button>
+      </div>
+    `;
+    form.querySelector('button[type=button]').onclick = close;
+    return form;
+  });
+}
+
+// =============================================================
+// Import / Export / Reset
+// =============================================================
+
+function exportData() {
+  const blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `athelio-${today()}.json`;
+  a.click();
+  localStorage.setItem('athelio:lastExport', String(Date.now()));
+  toast('Données exportées');
+}
+
+function importData(file) {
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    try {
+      state = migrate(JSON.parse(e.target.result));
+      save();
+      navigate(currentView);
+      toast('Données importées');
+    } catch {
+      toast('Fichier invalide');
+    }
+  };
+  reader.readAsText(file);
+}
+
+function resetData() {
+  confirmAction('Effacer toutes les données ? Cette action est irréversible.', () => {
+    localStorage.removeItem(STORAGE_KEY);
+    state = seed();
+    save();
+    navigate('dashboard');
+    toast('Données réinitialisées');
+  });
+}
+
+// =============================================================
+// PIN — écran de verrouillage
+// =============================================================
+
+function showLockScreen() {
+  return new Promise((resolve) => {
+    const root = $('#modal-root');
+    const overlay = el('div', { class: 'lock-screen' },
+      el('div', { class: 'lock-card' },
+        el('div', { class: 'lock-logo' }, 'A'),
+        el('h2', { class: 'lock-title' }, 'Athelio'),
+        el('p', { class: 'lock-sub' }, 'Entre ton code PIN'),
+        el('input', { type: 'password', inputmode: 'numeric', autocomplete: 'off',
+          class: 'lock-input', id: 'lock-input', maxlength: '12', autofocus: '' }),
+        el('div', { class: 'lock-err', id: 'lock-err' }),
+        el('button', { class: 'btn', id: 'lock-submit' }, 'Déverrouiller'),
+      ),
+    );
+    root.appendChild(overlay);
+
+    const input = $('#lock-input');
+    const err = $('#lock-err');
+    const submit = async () => {
+      const ok = await checkPin(input.value);
+      if (ok) { overlay.remove(); resolve(); }
+      else { err.textContent = 'Code incorrect.'; input.value = ''; input.focus(); }
+    };
+    $('#lock-submit').addEventListener('click', submit);
+    input.addEventListener('keydown', (e) => { if (e.key === 'Enter') submit(); });
+    setTimeout(() => input.focus(), 50);
+  });
+}
+
+// =============================================================
+// Paramètres (PIN, backups, infos stockage)
+// =============================================================
+
+views.settings = () => {
+  const wrap = el('div');
+  wrap.appendChild(viewHeader('Paramètres', 'Sécurité, sauvegardes et stockage.'));
+
+  // --- Sécurité ---
+  const pinCfg = getPinConfig();
+  const pinCard = el('div', { class: 'card' },
+    el('h3', {}, '🔒 Code PIN au démarrage'),
+    el('p', { style: 'color: var(--text-dim); font-size: 13px; margin: 0 0 12px;' },
+      pinCfg ? 'Un code PIN est actuellement défini. L\'app demandera ce code à chaque ouverture.'
+             : 'Aucun code PIN. Ajoute-en un pour verrouiller l\'app au démarrage.'),
+    el('div', { style: 'display: flex; gap: 8px; flex-wrap: wrap;' },
+      el('button', { class: 'btn', onClick: () => openPinForm(!!pinCfg) }, pinCfg ? 'Changer le PIN' : 'Définir un PIN'),
+      pinCfg ? el('button', { class: 'btn secondary', onClick: () => confirmAction('Supprimer le code PIN ?', () => {
+        setPinConfig(null); navigate('settings'); toast('PIN supprimé');
+      }) }, 'Supprimer le PIN') : null,
+    ),
+  );
+  wrap.appendChild(pinCard);
+
+  // --- Sauvegardes auto ---
+  const lastExport = localStorage.getItem('athelio:lastExport');
+  const lastExportDate = lastExport ? new Date(+lastExport) : null;
+  const daysSince = lastExportDate ? Math.floor((Date.now() - lastExportDate) / 86400000) : null;
+  const backupCard = el('div', { class: 'card', style: 'margin-top: 16px;' },
+    el('h3', {}, '💾 Sauvegardes'),
+    el('p', { style: 'color: var(--text-dim); font-size: 13px; margin: 0 0 8px;' },
+      lastExportDate ? `Dernier export : ${fmtDate(lastExportDate.toISOString().slice(0, 10))} (il y a ${daysSince} j)`
+                     : 'Aucun export pour le moment.'),
+    el('div', { style: 'display: flex; gap: 8px; flex-wrap: wrap;' },
+      el('button', { class: 'btn', onClick: exportData }, '⤓ Exporter maintenant'),
+      el('button', { class: 'btn secondary', onClick: () => $('#import-file').click() }, '⤒ Importer un export'),
+    ),
+    el('h3', { style: 'margin-top: 18px;' }, 'Historique automatique'),
+    el('p', { style: 'color: var(--text-dim); font-size: 13px; margin: 0 0 10px;' },
+      'Un instantané est créé automatiquement à chaque ouverture, après 24 h. Les 7 derniers sont conservés sur ton appareil (hors vidéos).'),
+    el('div', { id: 'snapshot-list' }, el('div', { class: 'empty' }, 'Chargement…')),
+  );
+  wrap.appendChild(backupCard);
+
+  // Hydrater la liste des snapshots
+  idbAll(STORE_SNAPSHOTS).then((snaps) => {
+    const list = $('#snapshot-list');
+    list.innerHTML = '';
+    if (!snaps.length) { list.appendChild(emptyState('Aucun instantané', 'Le premier sera créé après 24 h d\'utilisation.')); return; }
+    snaps.sort((a, b) => b.key - a.key).forEach((s) => {
+      const date = new Date(s.key);
+      list.appendChild(el('div', { class: 'list-item' },
+        el('div', {},
+          el('div', { class: 'title' }, date.toLocaleString('fr-FR')),
+          el('div', { class: 'meta' }, `${Math.round(JSON.stringify(s.value).length / 1024)} Ko`),
+        ),
+        el('div', { class: 'actions' },
+          el('button', { class: 'icon-btn', title: 'Restaurer', onClick: () => confirmAction('Restaurer cet instantané ? Les données actuelles seront remplacées.', () => {
+            state = migrate(s.value); save(); toast('Données restaurées'); navigate('dashboard');
+          }) }, '↺'),
+          el('button', { class: 'icon-btn danger', onClick: () => idbDel(STORE_SNAPSHOTS, s.key).then(() => navigate('settings')) }, '✕'),
+        ),
+      ));
+    });
+  });
+
+  // --- Google Drive ---
+  wrap.appendChild(driveSettingsCard());
+
+  // --- Infos stockage ---
+  const storageCard = el('div', { class: 'card', style: 'margin-top: 16px;' },
+    el('h3', {}, '📊 Stockage'),
+    el('div', { id: 'storage-info' }, 'Calcul…'),
+  );
+  wrap.appendChild(storageCard);
+  if (navigator.storage && navigator.storage.estimate) {
+    navigator.storage.estimate().then((est) => {
+      const used = (est.usage / 1_000_000).toFixed(1);
+      const quota = (est.quota / 1_000_000).toFixed(0);
+      $('#storage-info').textContent = `${used} Mo utilisés sur ~${quota} Mo disponibles.`;
+    });
+  }
+
+  return wrap;
+};
+
+function driveSettingsCard() {
+  const card = el('div', { class: 'card', style: 'margin-top: 16px;' });
+  card.appendChild(el('h3', {}, '☁️ Google Drive'));
+
+  const clientId = driveClientId();
+  const last = driveLastBackup();
+  const lastTxt = last ? `il y a ${Math.floor((Date.now() - last) / 3600000)} h` : 'jamais';
+
+  if (!clientId) {
+    card.appendChild(el('p', { style: 'color: var(--text-dim); font-size: 13px; margin: 0 0 8px;' },
+      'Configure un Client ID OAuth pour synchroniser tes données et vidéos avec ton Google Drive personnel.'));
+    card.appendChild(el('details', { style: 'margin: 8px 0 12px; font-size: 12px; color: var(--text-dim);' },
+      el('summary', { style: 'cursor: pointer; color: var(--accent);' }, 'Voir les étapes de configuration'),
+      el('ol', { style: 'padding-left: 18px; line-height: 1.7;' },
+        el('li', {}, 'Va sur ', el('a', { href: 'https://console.cloud.google.com/', target: '_blank', rel: 'noopener', style: 'color: var(--info);' }, 'console.cloud.google.com'), ' et crée un projet.'),
+        el('li', {}, 'Active l\'API Google Drive (APIs et services → Bibliothèque).'),
+        el('li', {}, 'Configure l\'écran de consentement OAuth en mode External + Testing, ajoute ton email comme testeur.'),
+        el('li', {}, 'Crée des identifiants OAuth 2.0 → Application Web.'),
+        el('li', {}, 'Ajoute l\'URL où tu héberges Athelio dans « Origines JavaScript autorisées » (ex: https://ton-app.netlify.app).'),
+        el('li', {}, 'Copie le Client ID (format: 123456789-abcdef.apps.googleusercontent.com) et colle-le ci-dessous.'),
+      ),
+    ));
+  } else {
+    card.appendChild(el('p', { style: 'color: var(--text-dim); font-size: 13px; margin: 0 0 12px;' },
+      `Dernière sauvegarde Drive : ${lastTxt}.`));
+  }
+
+  // Champ Client ID
+  const idInput = el('input', { type: 'text', value: clientId, placeholder: 'xxxxx.apps.googleusercontent.com',
+    style: 'width: 100%; background: var(--bg); border: 1px solid var(--border); color: var(--text); padding: 10px; border-radius: var(--radius-sm); font-size: 13px; font-family: monospace;' });
+  card.appendChild(el('label', { style: 'font-size: 11px; color: var(--text-dim); display: block; margin-bottom: 4px;' }, 'Client ID OAuth'));
+  card.appendChild(idInput);
+
+  // Statut connexion
+  const status = el('div', { id: 'drive-status', style: 'font-size: 12px; color: var(--text-dim); margin-top: 10px; min-height: 16px;' },
+    driveConnected() ? '🟢 Connecté' : (clientId ? '⚪ Non connecté' : ''));
+
+  // Boutons
+  const actions = el('div', { style: 'display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px;' },
+    el('button', { class: 'btn secondary', onClick: () => {
+      const v = idInput.value.trim();
+      setDriveClientId(v);
+      driveTokenClient = null; driveToken = null;
+      localStorage.removeItem(DRIVE_FOLDER_KEY);
+      navigate('settings');
+      toast(v ? 'Client ID enregistré' : 'Client ID supprimé');
+    } }, 'Enregistrer le Client ID'),
+    clientId ? el('button', { class: 'btn', onClick: async () => {
+      try { await driveAuth(); $('#drive-status').textContent = '🟢 Connecté'; toast('Connecté à Google Drive'); }
+      catch (e) { $('#drive-status').textContent = '🔴 ' + e.message; toast('Échec de la connexion'); }
+    } }, driveConnected() ? 'Rafraîchir le token' : 'Se connecter') : null,
+    driveConnected() ? el('button', { class: 'btn secondary', onClick: () => { driveDisconnect(); navigate('settings'); } }, 'Déconnecter') : null,
+  );
+  card.appendChild(actions);
+  card.appendChild(status);
+
+  if (!clientId) return card;
+
+  // Actions de sync
+  const progress = el('div', { id: 'drive-progress', style: 'font-size: 13px; color: var(--accent); margin-top: 12px; min-height: 18px;' });
+  const syncActions = el('div', { style: 'display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px;' },
+    el('button', { class: 'btn', onClick: async () => {
+      try { await driveBackupNow((m) => { $('#drive-progress').textContent = m; }); navigate('settings'); }
+      catch (e) { $('#drive-progress').textContent = '❌ ' + e.message; }
+    } }, '⬆️ Sauvegarder maintenant'),
+    el('button', { class: 'btn secondary', onClick: () => openDriveRestore() }, '⬇️ Restaurer un backup'),
+  );
+  card.appendChild(el('h3', { style: 'margin-top: 18px;' }, 'Synchronisation'));
+  card.appendChild(el('p', { style: 'color: var(--text-dim); font-size: 13px; margin: 0 0 4px;' },
+    'Sauvegarde JSON + vidéos non encore envoyées. Lancé automatiquement 1 fois/jour si tu es connecté.'));
+  card.appendChild(syncActions);
+  card.appendChild(progress);
+
+  return card;
+}
+
+async function openDriveRestore() {
+  try {
+    await driveAuth({ silent: false });
+  } catch (e) { toast('Connexion requise : ' + e.message); return; }
+
+  openModal('Restaurer depuis Google Drive', (close) => {
+    const wrap = el('div');
+    wrap.appendChild(el('p', { style: 'font-size: 13px; color: var(--text-dim);' }, 'Chargement des backups…'));
+
+    driveListBackups().then((files) => {
+      wrap.innerHTML = '';
+      if (!files.length) {
+        wrap.appendChild(emptyState('Aucun backup', 'Lance d\'abord une sauvegarde manuelle.'));
+        return;
+      }
+      wrap.appendChild(el('p', { style: 'font-size: 12px; color: var(--text-dim); margin: 0 0 10px;' },
+        `${files.length} backup(s) trouvé(s) :`));
+      files.forEach((f) => {
+        wrap.appendChild(el('div', { class: 'list-item' },
+          el('div', {},
+            el('div', { class: 'title' }, f.name),
+            el('div', { class: 'meta' }, `${new Date(f.createdTime).toLocaleString('fr-FR')} · ${Math.round((f.size || 0) / 1024)} Ko`),
+          ),
+          el('button', { class: 'btn small', onClick: () => confirmAction('Restaurer ce backup ? Les données actuelles seront remplacées.', async () => {
+            close();
+            const p = el('div', { class: 'toast', style: 'border-left-color: var(--info);' }, 'Restauration…');
+            $('#toast-root').appendChild(p);
+            try {
+              await driveRestoreFromFile(f.id, (m) => { p.textContent = m; });
+              setTimeout(() => p.remove(), 1800);
+            } catch (e) {
+              p.textContent = '❌ ' + e.message;
+              setTimeout(() => p.remove(), 4000);
+            }
+          }) }, 'Restaurer'),
+        ));
+      });
+    }).catch((e) => {
+      wrap.innerHTML = '';
+      wrap.appendChild(el('p', { style: 'color: var(--danger);' }, '❌ ' + e.message));
+    });
+
+    return wrap;
+  });
+}
+
+function openPinForm(isChange) {
+  openModal(isChange ? 'Changer le PIN' : 'Définir un PIN', (close) => {
+    const form = el('form', { class: 'form', onSubmit: async (e) => {
+      e.preventDefault();
+      const d = Object.fromEntries(new FormData(e.target));
+      if (isChange) {
+        const ok = await checkPin(d.current || '');
+        if (!ok) { toast('Code actuel incorrect.'); return; }
+      }
+      if (!d.pin || d.pin.length < 4) { toast('Le PIN doit faire au moins 4 chiffres.'); return; }
+      if (d.pin !== d.pin2) { toast('Les deux codes ne correspondent pas.'); return; }
+      await savePin(d.pin);
+      close(); navigate('settings'); toast('PIN enregistré');
+    } });
+    form.innerHTML = `
+      ${isChange ? '<div><label>Code actuel</label><input type="password" inputmode="numeric" name="current" required></div>' : ''}
+      <div><label>Nouveau code (4-12 chiffres)</label><input type="password" inputmode="numeric" name="pin" minlength="4" maxlength="12" required></div>
+      <div><label>Confirmer</label><input type="password" inputmode="numeric" name="pin2" minlength="4" maxlength="12" required></div>
+      <div class="form-actions">
+        <button type="button" class="btn secondary">Annuler</button>
+        <button type="submit" class="btn">Enregistrer</button>
+      </div>
+    `;
+    form.querySelector('button[type=button]').onclick = close;
+    return form;
+  });
+}
+
+// =============================================================
+// Backup auto (snapshots quotidiens + rappel d'export)
+// =============================================================
+
+const SNAPSHOT_INTERVAL_MS = 86400000;     // 1 instantané / jour max
+const SNAPSHOT_KEEP = 7;
+const EXPORT_REMINDER_DAYS = 14;
+
+async function maybeAutoSnapshot() {
+  try {
+    const last = +localStorage.getItem('athelio:lastSnapshot') || 0;
+    if (Date.now() - last < SNAPSHOT_INTERVAL_MS) return;
+    // Cloner sans les vidéos (data URL anciennes formes peuvent être lourdes)
+    const snap = JSON.parse(JSON.stringify(state));
+    snap.videos = (snap.videos || []).map(v => { const { data, ...rest } = v; return rest; });
+    await idbPut(STORE_SNAPSHOTS, Date.now(), snap);
+    localStorage.setItem('athelio:lastSnapshot', String(Date.now()));
+    // Rotation : garder seulement les N plus récents
+    const all = await idbAll(STORE_SNAPSHOTS);
+    if (all.length > SNAPSHOT_KEEP) {
+      all.sort((a, b) => b.key - a.key);
+      for (const old of all.slice(SNAPSHOT_KEEP)) await idbDel(STORE_SNAPSHOTS, old.key);
+    }
+  } catch {}
+}
+
+function showBackupReminderIfNeeded() {
+  const last = +localStorage.getItem('athelio:lastExport') || 0;
+  const days = last ? Math.floor((Date.now() - last) / 86400000) : Infinity;
+  if (days < EXPORT_REMINDER_DAYS) return;
+  const banner = el('div', { class: 'backup-banner' },
+    el('span', {}, last
+      ? `💾 Dernier export il y a ${days} jours — pense à sauvegarder.`
+      : '💾 Pense à exporter ta première sauvegarde.'),
+    el('div', { style: 'display: flex; gap: 6px;' },
+      el('button', { class: 'btn small', onClick: () => { exportData(); banner.remove(); } }, 'Exporter'),
+      el('button', { class: 'icon-btn', onClick: () => banner.remove() }, '✕'),
+    ),
+  );
+  document.body.appendChild(banner);
+}
+
+// =============================================================
+// Boot
+// =============================================================
+
+function closeNav() { document.body.classList.remove('nav-open'); }
+
+document.addEventListener('DOMContentLoaded', async () => {
+  // 1) Verrou PIN si configuré
+  if (getPinConfig()) {
+    document.body.classList.add('locked');
+    await showLockScreen();
+    document.body.classList.remove('locked');
+  }
+
+  // 2) Demande au navigateur de ne pas évincer notre stockage (vidéos lourdes !)
+  if (navigator.storage && navigator.storage.persist) {
+    try { await navigator.storage.persist(); } catch {}
+  }
+
+  $$('.nav-btn').forEach(b => b.addEventListener('click', () => { navigate(b.dataset.view); closeNav(); }));
+  $('#export-btn').addEventListener('click', exportData);
+  $('#import-btn').addEventListener('click', () => $('#import-file').click());
+  $('#import-file').addEventListener('change', (e) => { if (e.target.files[0]) importData(e.target.files[0]); });
+  $('#reset-btn').addEventListener('click', resetData);
+  const settingsBtn = $('#settings-btn');
+  if (settingsBtn) settingsBtn.addEventListener('click', () => { navigate('settings'); closeNav(); });
+
+  // Menu mobile (drawer coulissant)
+  const toggle = $('#menu-toggle');
+  const backdrop = $('#nav-backdrop');
+  if (toggle) toggle.addEventListener('click', () => document.body.classList.toggle('nav-open'));
+  if (backdrop) backdrop.addEventListener('click', closeNav);
+
+  navigate('dashboard');
+
+  // 3) Auto-snapshot quotidien + rappel d'export tous les 14 jours
+  maybeAutoSnapshot();
+  showBackupReminderIfNeeded();
+
+  // 4) Auto-backup Google Drive (1/jour, silencieux)
+  setTimeout(() => maybeAutoDriveBackup(), 2000); // laisse GSI se charger
+});
