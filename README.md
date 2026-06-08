@@ -6,25 +6,40 @@ Compagnon de performance personnelle pour les sportifs qui ne font pas les chose
 
 ## Fonctionnalités
 
+Chaque domaine a son propre module dans la barre latérale.
+
 ### 🏸 Badminton
-- Suivi des matchs (score, adversaire, victoire/défaite, notes)
+- Suivi des matchs (score, adversaire, victoire/défaite)
+- Pour chaque match : ce que j'ai bien fait, ce que j'ai mal fait, et les points à travailler
 - Statistiques par type de jeu (simple, double, mixte)
 - Suivi des tournois et interclubs
 
-### 📈 Progression
-- Évolution du poids
-- Suivi des sorties course à pied (distance, durée, allure)
-- Historique des séances de musculation et progression des charges
-- Mensurations (taille, bras, cuisses, poitrine)
-- Photos avant / après
+### 🏃 Course à pied
+- Suivi des sorties (distance, durée, allure automatique)
+
+### 🏋️ Musculation
+- Historique des séances et progression des charges par exercice
+
+### ⚖️ Poids
+- Évolution du poids de forme
+
+### 📏 Mensurations
+- Poitrine, bras, taille, cuisse — avec un schéma du corps humain indiquant où mesurer
+- Graphique d'évolution
+
+### 📷 Photos
+- Avant / après pour documenter la transformation
 
 ### 🎯 Objectifs
 - Objectifs datés avec barre de progression
 - Validation et historique des objectifs atteints
 
 ### 🌙 Récupération
-- Journal quotidien : sommeil, fatigue, douleurs, mobilité
-- Graphique d'évolution sur la durée
+- Journal de fatigue et de douleurs avec graphique d'évolution
+
+### 🎥 Vidéos
+- Vidéos datées (lien YouTube / Vimeo / Drive ou fichier court) + notes
+- Visionne facilement ta progression technique dans le temps
 
 ## Sports suivis
 Badminton · Course à pied · Musculation
