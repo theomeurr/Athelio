@@ -656,6 +656,171 @@ body.locked { overflow: hidden; }
   align-items: center;
 }
 
+/* Comparaisons avant/après */
+.compare-card { display: flex; flex-direction: column; gap: 14px; }
+.compare-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+.compare-title { font-weight: 700; font-size: 16px; }
+.compare-date { font-size: 12px; color: var(--text-dim); margin-top: 2px; }
+.compare-canvas {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  background: var(--bg);
+  border-radius: var(--radius-sm);
+  padding: 10px;
+}
+.compare-side { display: flex; flex-direction: column; gap: 6px; }
+.compare-label {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-dim);
+  background: rgba(255, 255, 255, 0.04);
+  padding: 4px 10px;
+  border-radius: 99px;
+  align-self: flex-start;
+}
+.compare-label.after { color: var(--accent); background: var(--accent-soft); }
+.compare-img-wrap {
+  background: #000;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  aspect-ratio: 3 / 4;
+}
+.compare-img-wrap img {
+  max-width: 100%;
+  max-height: 100%;
+  width: auto;
+  height: auto;
+  object-fit: contain;
+  cursor: zoom-in;
+  display: block;
+}
+.compare-notes {
+  font-size: 13px;
+  color: var(--text);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  background: var(--bg);
+  border-radius: var(--radius-sm);
+  padding: 12px 14px;
+}
+
+/* Formulaire de comparaison */
+.compare-picker {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+}
+.compare-thumb {
+  background: var(--bg);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-sm);
+  aspect-ratio: 3 / 4;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-dim);
+  font-size: 12px;
+  overflow: hidden;
+}
+.compare-thumb img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+
+/* Zoom plein écran */
+.image-zoom {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.92);
+  display: grid;
+  place-items: center;
+  z-index: 200;
+  cursor: zoom-out;
+  padding: 20px;
+}
+.image-zoom img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+
+@media (max-width: 720px) {
+  .compare-canvas { grid-template-columns: 1fr 1fr; padding: 6px; gap: 6px; }
+  .compare-picker { grid-template-columns: 1fr; }
+}
+
+/* Muscu : sélecteur de groupes musculaires */
+.muscle-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  margin-top: 4px;
+}
+@media (max-width: 720px) {
+  .muscle-grid { grid-template-columns: repeat(2, 1fr); }
+}
+.muscle-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 10px 6px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-dim);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: 0.15s;
+}
+.muscle-btn:hover { border-color: var(--accent); color: var(--text); }
+.muscle-btn.active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.muscle-emoji { font-size: 22px; line-height: 1; }
+
+/* Pills de répartition par groupe */
+.group-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.group-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 99px;
+  padding: 6px 12px 6px 10px;
+  font-size: 13px;
+}
+.group-pill-label { color: var(--text); }
+.group-pill-count {
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 700;
+  font-size: 12px;
+  border-radius: 99px;
+  padding: 2px 8px;
+}
+
 /* Mood scale */
 .scale {
   display: flex;

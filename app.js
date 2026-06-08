@@ -16,6 +16,7 @@ const defaultState = {
   videos: [],
   mobility: [],
   sobriety: [],
+  comparisons: [],
 };
 
 let state = load();
@@ -45,12 +46,38 @@ function migrate(parsed) {
   s.photos = parsed.photos || old.photos || [];
   delete s.progression;
   s.badminton = { ...defaultState.badminton, ...(parsed.badminton || {}) };
-  for (const k of ['weight', 'measurements', 'runs', 'lifts', 'photos', 'goals', 'recovery', 'videos', 'mobility', 'sobriety']) {
+  for (const k of ['weight', 'measurements', 'runs', 'lifts', 'photos', 'goals', 'recovery', 'videos', 'mobility', 'sobriety', 'comparisons']) {
     if (!Array.isArray(s[k])) s[k] = [];
   }
   if (!Array.isArray(s.badminton.matches)) s.badminton.matches = [];
   if (!Array.isArray(s.badminton.tournaments)) s.badminton.tournaments = [];
+  // Migration : matchs en 1 score → tableau de sets
+  s.badminton.matches = s.badminton.matches.map(m => {
+    if (Array.isArray(m.sets) && m.sets.length) return m;
+    if (m.myScore != null && m.oppScore != null) {
+      return { ...m, sets: [{ me: +m.myScore, opp: +m.oppScore }] };
+    }
+    return { ...m, sets: [] };
+  });
   return s;
+}
+
+// Helpers de score sur sets ----------------------------------------------------
+function matchSetsWon(m) {
+  const sets = m.sets || [];
+  const me = sets.filter(s => +s.me > +s.opp).length;
+  const opp = sets.filter(s => +s.opp > +s.me).length;
+  return { me, opp };
+}
+function matchResult(m) {
+  const { me, opp } = matchSetsWon(m);
+  if (me === opp) return 'draw';
+  return me > opp ? 'win' : 'loss';
+}
+function matchScoreLabel(m) {
+  const sets = m.sets || [];
+  if (!sets.length) return '—';
+  return sets.map(s => `${s.me}-${s.opp}`).join(' / ');
 }
 
 function save() {
@@ -759,12 +786,14 @@ views.badminton = () => {
     } else {
       const table = el('table');
       table.appendChild(el('thead', {}, el('tr', {},
-        ...['Date', 'Adversaire', 'Type', 'Score', 'Résultat', ''].map(h => el('th', {}, h)))));
+        ...['Date', 'Adversaire', 'Type', 'Sets', 'Score', 'Résultat', ''].map(h => el('th', {}, h)))));
       const tbody = el('tbody');
       [...matches].sort((a, b) => b.date.localeCompare(a.date)).forEach(m => {
         const hasNotes = (m.goodPoints || m.badPoints || m.workPoints || m.notes || '').trim().length > 0;
+        const setsWon = matchSetsWon(m);
+        const result = matchResult(m);
         const detailRow = el('tr', { class: 'match-notes-row', hidden: '' },
-          el('td', { colspan: '6' },
+          el('td', { colspan: '7' },
             el('div', { class: 'match-notes' },
               noteBlock('✅ Bien fait', m.goodPoints),
               noteBlock('❌ Mal fait', m.badPoints),
@@ -778,12 +807,16 @@ views.badminton = () => {
           if (open) detailRow.removeAttribute('hidden'); else detailRow.setAttribute('hidden', '');
           e.currentTarget.textContent = open ? '▴' : '▾';
         } }, '▾') : null;
+        const resBadge = result === 'win' ? '<span class="badge win">Victoire</span>'
+                       : result === 'loss' ? '<span class="badge loss">Défaite</span>'
+                       : '<span class="badge neutral">Égalité</span>';
         tbody.appendChild(el('tr', {},
           el('td', {}, fmtDate(m.date)),
           el('td', {}, m.opponent || '—'),
           el('td', { html: `<span class="badge neutral">${m.type}</span>` }),
-          el('td', {}, `${m.myScore} – ${m.oppScore}`),
-          el('td', { html: `<span class="badge ${m.result === 'win' ? 'win' : 'loss'}">${m.result === 'win' ? 'Victoire' : 'Défaite'}</span>` }),
+          el('td', { style: 'white-space: nowrap;' }, `${setsWon.me}–${setsWon.opp}`),
+          el('td', { style: 'white-space: nowrap;' }, matchScoreLabel(m)),
+          el('td', { html: resBadge }),
           el('td', { style: 'text-align: right; white-space: nowrap;' },
             toggle,
             el('button', { class: 'icon-btn', onClick: () => openMatchForm(m) }, '✎'),
@@ -868,24 +901,38 @@ function tabBtn(key, label, onClick) {
 }
 
 function openMatchForm(existing) {
-  const m = existing || { date: today(), opponent: '', type: 'simple', myScore: 21, oppScore: 0, goodPoints: '', badPoints: '', workPoints: '' };
+  const initialSets = existing?.sets?.length ? existing.sets.map(s => ({ me: s.me, opp: s.opp })) : [{ me: 21, opp: 0 }];
+  const m = existing || { date: today(), opponent: '', type: 'simple', goodPoints: '', badPoints: '', workPoints: '' };
+  let sets = initialSets;
+
   openModal(existing ? 'Modifier le match' : 'Nouveau match', (close) => {
     const form = el('form', { class: 'form', onSubmit: (e) => {
       e.preventDefault();
       const data = Object.fromEntries(new FormData(e.target));
+      // Récupère les scores des sets depuis le DOM
+      const setRows = form.querySelectorAll('.set-row');
+      const cleanSets = [];
+      setRows.forEach(row => {
+        const me = +row.querySelector('input[data-side=me]').value;
+        const opp = +row.querySelector('input[data-side=opp]').value;
+        if (!isNaN(me) && !isNaN(opp) && (me > 0 || opp > 0)) cleanSets.push({ me, opp });
+      });
+      if (!cleanSets.length) { toast('Saisis au moins un set.'); return; }
       const entry = {
         id: existing?.id || id(),
         date: data.date,
         opponent: data.opponent.trim(),
         type: data.type,
-        myScore: +data.myScore,
-        oppScore: +data.oppScore,
-        result: +data.myScore > +data.oppScore ? 'win' : 'loss',
+        sets: cleanSets,
         goodPoints: data.goodPoints.trim(),
         badPoints: data.badPoints.trim(),
         workPoints: data.workPoints.trim(),
         notes: existing?.notes || '',
       };
+      entry.result = matchResult(entry);
+      // Compat : on garde myScore/oppScore = somme totale pour anciens calculs
+      entry.myScore = cleanSets.reduce((s, x) => s + x.me, 0);
+      entry.oppScore = cleanSets.reduce((s, x) => s + x.opp, 0);
       if (existing) {
         state.badminton.matches = state.badminton.matches.map(x => x.id === entry.id ? entry : x);
       } else {
@@ -893,6 +940,26 @@ function openMatchForm(existing) {
       }
       save(); close(); navigate('badminton'); toast(existing ? 'Match mis à jour' : 'Match ajouté');
     } });
+
+    function renderSets() {
+      const container = form.querySelector('#sets-container');
+      container.innerHTML = '';
+      sets.forEach((s, i) => {
+        const row = el('div', { class: 'set-row', style: 'display: grid; grid-template-columns: 28px 1fr 1fr auto; gap: 8px; align-items: center; margin-bottom: 6px;' },
+          el('div', { style: 'font-size: 12px; color: var(--text-dim); font-weight: 600;' }, `Set ${i + 1}`),
+          el('input', { type: 'number', min: '0', 'data-side': 'me', value: String(s.me), required: '', style: 'text-align: center;' }),
+          el('input', { type: 'number', min: '0', 'data-side': 'opp', value: String(s.opp), required: '', style: 'text-align: center;' }),
+          sets.length > 1 ? el('button', { type: 'button', class: 'icon-btn danger', onClick: () => {
+            // Mémorise les valeurs courantes avant de re-render
+            const rows = form.querySelectorAll('.set-row');
+            sets = Array.from(rows).map(r => ({ me: +r.querySelector('input[data-side=me]').value, opp: +r.querySelector('input[data-side=opp]').value }));
+            sets.splice(i, 1); renderSets();
+          } }, '✕') : el('div'),
+        );
+        container.appendChild(row);
+      });
+    }
+
     form.innerHTML = `
       <div class="form-row">
         <div><label>Date</label><input type="date" name="date" value="${m.date}" required></div>
@@ -903,19 +970,34 @@ function openMatchForm(existing) {
         </select></div>
       </div>
       <div><label>Adversaire</label><input type="text" name="opponent" value="${m.opponent || ''}" placeholder="Nom ou équipe"></div>
-      <div class="form-row">
-        <div><label>Mon score</label><input type="number" name="myScore" value="${m.myScore}" min="0" required></div>
-        <div><label>Score adverse</label><input type="number" name="oppScore" value="${m.oppScore}" min="0" required></div>
+      <div>
+        <label>Scores par set</label>
+        <div style="display: grid; grid-template-columns: 28px 1fr 1fr auto; gap: 8px; font-size: 11px; color: var(--text-dim); padding: 0 0 4px; text-transform: uppercase; letter-spacing: 0.5px;">
+          <div></div><div style="text-align: center;">Moi</div><div style="text-align: center;">Adv.</div><div></div>
+        </div>
+        <div id="sets-container"></div>
+        <button type="button" id="add-set-btn" class="btn small secondary" style="margin-top: 4px;">+ Ajouter un set</button>
       </div>
-      <div><label>✅ Qu’est-ce que j’ai bien fait&nbsp;?</label><textarea name="goodPoints" placeholder="Points forts du match…">${m.goodPoints || ''}</textarea></div>
-      <div><label>❌ Qu’est-ce que j’ai mal fait&nbsp;?</label><textarea name="badPoints" placeholder="Erreurs, points faibles…">${m.badPoints || ''}</textarea></div>
+      <div><label>✅ Qu'est-ce que j'ai bien fait&nbsp;?</label><textarea name="goodPoints" placeholder="Points forts du match…">${m.goodPoints || ''}</textarea></div>
+      <div><label>❌ Qu'est-ce que j'ai mal fait&nbsp;?</label><textarea name="badPoints" placeholder="Erreurs, points faibles…">${m.badPoints || ''}</textarea></div>
       <div><label>🎯 Sur quels points dois-je bosser&nbsp;?</label><textarea name="workPoints" placeholder="Axes de travail pour la prochaine fois…">${m.workPoints || ''}</textarea></div>
       <div class="form-actions">
         <button type="button" class="btn secondary">Annuler</button>
         <button type="submit" class="btn">Enregistrer</button>
       </div>
     `;
-    form.querySelector('button[type=button]').onclick = close;
+    // Render initial des sets
+    renderSets();
+    // Bouton "+ Ajouter un set"
+    form.querySelector('#add-set-btn').addEventListener('click', () => {
+      // Mémoriser les valeurs courantes avant le re-render
+      const rows = form.querySelectorAll('.set-row');
+      sets = Array.from(rows).map(r => ({ me: +r.querySelector('input[data-side=me]').value, opp: +r.querySelector('input[data-side=opp]').value }));
+      sets.push({ me: 21, opp: 0 });
+      renderSets();
+    });
+    // Bouton Annuler (le seul de .form-actions)
+    form.querySelector('.form-actions button[type=button]').onclick = close;
     return form;
   });
 }
@@ -1059,88 +1141,202 @@ function openRunForm() {
 
 // ---------- Musculation ----------
 
+const MUSCLE_GROUPS = [
+  { key: 'chest', label: 'Pecs', emoji: '🫀' },
+  { key: 'back', label: 'Dos', emoji: '🦾' },
+  { key: 'shoulders', label: 'Épaules', emoji: '💪' },
+  { key: 'arms', label: 'Bras', emoji: '💪' },
+  { key: 'legs', label: 'Jambes', emoji: '🦵' },
+  { key: 'glutes', label: 'Fessiers', emoji: '🍑' },
+  { key: 'core', label: 'Abdos / Core', emoji: '🧘' },
+  { key: 'cardio', label: 'Cardio', emoji: '🏃' },
+  { key: 'fullbody', label: 'Full-body', emoji: '🔥' },
+];
+
+function muscleLabel(k) {
+  const g = MUSCLE_GROUPS.find(x => x.key === k);
+  return g ? `${g.emoji} ${g.label}` : k;
+}
+
+// Lundi de la semaine ISO d'une date donnée
+function isoWeekStart(dateStr) {
+  const d = new Date(dateStr);
+  const day = (d.getDay() + 6) % 7; // 0 = lundi
+  d.setDate(d.getDate() - day);
+  return d.toISOString().slice(0, 10);
+}
+
 views.lifts = () => {
   const wrap = el('div');
-  wrap.appendChild(viewHeader('Musculation', 'Historique des séances et progression des charges.',
+  wrap.appendChild(viewHeader('Musculation', 'Quel jour, quel groupe — pour te souvenir. Les détails de séries sont dans Hevy.',
     el('button', { class: 'btn', onClick: () => openLiftForm() }, '+ Nouvelle séance')));
 
-  const exercises = [...new Set(state.lifts.map(l => l.exercise))];
-  const card = el('div', { class: 'card' }, el('h3', {}, 'Charges max par exercice'),
-    el('div', { class: 'chart-wrap tall' }, el('canvas', { id: 'l-chart' })));
-  wrap.appendChild(card);
+  const all = [...state.lifts].sort((a, b) => b.date.localeCompare(a.date));
 
+  // KPIs : cette semaine / semaine dernière / total / streak
+  const todayStr = today();
+  const thisWeekStart = isoWeekStart(todayStr);
+  const lastWeekStart = (() => {
+    const d = new Date(thisWeekStart); d.setDate(d.getDate() - 7);
+    return d.toISOString().slice(0, 10);
+  })();
+  const thisWeek = all.filter(l => l.date >= thisWeekStart);
+  const lastWeek = all.filter(l => l.date >= lastWeekStart && l.date < thisWeekStart);
+  const delta = thisWeek.length - lastWeek.length;
+
+  const kpis = el('div', { class: 'grid cols-3' });
+  kpis.appendChild(kpiCard('🗓️ Cette semaine', String(thisWeek.length), thisWeek.length > 1 ? 'séances' : 'séance',
+    thisWeek.length >= 3 ? 'success' : (thisWeek.length ? 'accent' : 'danger')));
+  kpis.appendChild(kpiCard('⏪ Semaine dernière', String(lastWeek.length),
+    delta === 0 ? '= même rythme' : (delta > 0 ? `+${delta} cette semaine` : `${delta} cette semaine`),
+    delta >= 0 ? 'success' : 'danger'));
+  kpis.appendChild(kpiCard('📊 Total séances', String(all.length), all.length ? `depuis ${fmtDate(all.at(-1).date)}` : ''));
+  wrap.appendChild(kpis);
+  wrap.appendChild(el('div', { style: 'height: 16px;' }));
+
+  // Graphique : séances par semaine (8 dernières)
+  const chartCard = el('div', { class: 'card' }, el('h3', {}, 'Fréquence par semaine'),
+    el('div', { class: 'chart-wrap' }, el('canvas', { id: 'lift-chart' })));
+  wrap.appendChild(chartCard);
+
+  // Répartition par groupe musculaire (4 dernières semaines)
+  const groupCard = el('div', { class: 'card', style: 'margin-top: 16px;' }, el('h3', {}, 'Groupes travaillés (4 dernières semaines)'));
+  const cutoff = (() => { const d = new Date(); d.setDate(d.getDate() - 28); return d.toISOString().slice(0, 10); })();
+  const recent = all.filter(l => l.date >= cutoff);
+  const groupCounts = {};
+  recent.forEach(l => (l.groups || []).forEach(g => { groupCounts[g] = (groupCounts[g] || 0) + 1; }));
+  if (!Object.keys(groupCounts).length) {
+    groupCard.appendChild(emptyState('Aucune séance récente', 'Tes groupes apparaîtront ici dès la première séance.'));
+  } else {
+    const sorted = Object.entries(groupCounts).sort((a, b) => b[1] - a[1]);
+    const pills = el('div', { class: 'group-pills' });
+    sorted.forEach(([k, count]) => pills.appendChild(el('div', { class: 'group-pill' },
+      el('span', { class: 'group-pill-label' }, muscleLabel(k)),
+      el('span', { class: 'group-pill-count' }, String(count)),
+    )));
+    groupCard.appendChild(pills);
+  }
+  wrap.appendChild(groupCard);
+
+  // Historique
   const list = el('div', { class: 'card', style: 'margin-top: 16px;' }, el('h3', {}, 'Historique'));
-  const arr = [...state.lifts].sort((a, b) => b.date.localeCompare(a.date));
-  if (!arr.length) list.appendChild(emptyState('Aucune séance', 'Ajoute ta première séance.'));
-  arr.forEach(l => list.appendChild(el('div', { class: 'list-item' },
-    el('div', {},
-      el('div', { class: 'title' }, `${l.exercise} — ${l.weight} kg`),
-      el('div', { class: 'meta' }, `${fmtDate(l.date)} · ${l.sets} × ${l.reps} reps`),
-    ),
-    el('button', { class: 'icon-btn danger', onClick: () => {
-      state.lifts = state.lifts.filter(x => x.id !== l.id);
-      save(); navigate('lifts');
-    } }, '✕'),
-  )));
+  if (!all.length) {
+    list.appendChild(emptyState('Aucune séance', 'Ajoute ta première séance.'));
+  } else {
+    all.forEach(l => list.appendChild(el('div', { class: 'list-item' },
+      el('div', {},
+        el('div', { class: 'title' },
+          (l.groups || []).map(muscleLabel).join(' · ') || (l.exercise ? l.exercise : '—'),
+        ),
+        el('div', { class: 'meta' },
+          `${fmtDate(l.date)}${l.focus ? ' · ' + l.focus : ''}${l.notes ? ' · ' + l.notes : ''}`),
+      ),
+      el('div', { class: 'actions' },
+        el('button', { class: 'icon-btn', onClick: () => openLiftForm(l) }, '✎'),
+        el('button', { class: 'icon-btn danger', onClick: () => {
+          state.lifts = state.lifts.filter(x => x.id !== l.id);
+          save(); navigate('lifts');
+        } }, '✕'),
+      ),
+    )));
+  }
   wrap.appendChild(list);
 
+  // Graphique séances/semaine
   setTimeout(() => {
-    if (!exercises.length) return;
-    const palette = [chartTheme.accent, chartTheme.info, chartTheme.success, chartTheme.accent2, '#ad6cff'];
-    const allDates = [...new Set(state.lifts.map(l => l.date))].sort();
-    const labels = allDates.map(d => shortDate(d));
-    const datasets = exercises.map((ex, i) => {
-      const byDate = Object.fromEntries(
-        state.lifts.filter(l => l.exercise === ex).map(l => [l.date, l.weight])
-      );
-      return {
-        label: ex,
-        data: allDates.map(d => byDate[d] ?? null),
-        borderColor: palette[i % palette.length],
-        backgroundColor: palette[i % palette.length],
-        tension: 0.3,
-        pointRadius: 4,
-        fill: false,
-        spanGaps: true,
-      };
-    });
-    chart($('#l-chart').getContext('2d'), {
-      type: 'line',
-      data: { labels, datasets },
+    const buckets = {};
+    all.forEach(l => { const k = isoWeekStart(l.date); buckets[k] = (buckets[k] || 0) + 1; });
+    // 8 dernières semaines
+    const weeks = [];
+    for (let i = 7; i >= 0; i--) {
+      const d = new Date(thisWeekStart); d.setDate(d.getDate() - i * 7);
+      weeks.push(d.toISOString().slice(0, 10));
+    }
+    chart($('#lift-chart').getContext('2d'), {
+      type: 'bar',
+      data: {
+        labels: weeks.map(w => 'sem ' + shortDate(w)),
+        datasets: [{
+          label: 'Séances',
+          data: weeks.map(w => buckets[w] || 0),
+          backgroundColor: weeks.map(w => w === thisWeekStart ? chartTheme.accent : chartTheme.info),
+          borderRadius: 6,
+        }],
+      },
       options: {
         responsive: true, maintainAspectRatio: false,
-        plugins: { legend: { position: 'bottom', labels: { color: chartTheme.text } } },
-        scales: baseScales('kg'),
+        plugins: { legend: { display: false } },
+        scales: { ...baseScales(), y: { ...baseScales().y, ticks: { stepSize: 1, color: chartTheme.text }, beginAtZero: true } },
       },
     });
   }, 0);
+
   return wrap;
 };
 
-function openLiftForm() {
-  openModal('Nouvelle séance', (close) => {
+function openLiftForm(existing) {
+  const l = existing || { date: today(), groups: [], focus: '', notes: '' };
+  let selectedGroups = new Set(l.groups || []);
+
+  openModal(existing ? 'Modifier la séance' : 'Nouvelle séance', (close) => {
     const form = el('form', { class: 'form', onSubmit: (e) => {
       e.preventDefault();
       const d = Object.fromEntries(new FormData(e.target));
-      state.lifts.push({ id: id(), date: d.date, exercise: d.exercise.trim(), weight: +d.weight, reps: +d.reps, sets: +d.sets });
-      save(); close(); navigate('lifts'); toast('Séance ajoutée');
+      if (!selectedGroups.size) { toast('Sélectionne au moins un groupe musculaire.'); return; }
+      const entry = {
+        id: existing?.id || id(),
+        date: d.date,
+        groups: Array.from(selectedGroups),
+        focus: (d.focus || '').trim(),
+        notes: (d.notes || '').trim(),
+      };
+      if (existing) state.lifts = state.lifts.map(x => x.id === entry.id ? entry : x);
+      else state.lifts.push(entry);
+      save(); close(); navigate('lifts'); toast(existing ? 'Séance mise à jour' : 'Séance ajoutée');
     } });
-    form.innerHTML = `
-      <div class="form-row">
-        <div><label>Date</label><input type="date" name="date" value="${today()}" required></div>
-        <div><label>Exercice</label><input type="text" name="exercise" placeholder="Squat, Bench…" required></div>
-      </div>
-      <div class="form-row">
-        <div><label>Charge (kg)</label><input type="number" step="0.5" name="weight" required></div>
-        <div><label>Reps</label><input type="number" name="reps" value="5" required></div>
-      </div>
-      <div><label>Séries</label><input type="number" name="sets" value="4" required></div>
-      <div class="form-actions">
-        <button type="button" class="btn secondary">Annuler</button>
-        <button type="submit" class="btn">Enregistrer</button>
-      </div>
-    `;
-    form.querySelector('button[type=button]').onclick = close;
+
+    form.appendChild(el('div', {},
+      el('label', {}, 'Date'),
+      el('input', { type: 'date', name: 'date', value: l.date, required: '' }),
+    ));
+
+    const groupsField = el('div', {},
+      el('label', {}, 'Groupe(s) musculaire(s) travaillé(s)'),
+      el('div', { class: 'muscle-grid' }),
+    );
+    const grid = groupsField.querySelector('.muscle-grid');
+    MUSCLE_GROUPS.forEach(g => {
+      const btn = el('button', {
+        type: 'button',
+        class: `muscle-btn${selectedGroups.has(g.key) ? ' active' : ''}`,
+        onClick: () => {
+          if (selectedGroups.has(g.key)) selectedGroups.delete(g.key);
+          else selectedGroups.add(g.key);
+          btn.classList.toggle('active');
+        },
+      }, el('span', { class: 'muscle-emoji' }, g.emoji), el('span', {}, g.label));
+      grid.appendChild(btn);
+    });
+    form.appendChild(groupsField);
+
+    form.appendChild(el('div', {},
+      el('label', {}, 'Focus de la séance (facultatif)'),
+      el('input', { type: 'text', name: 'focus', value: l.focus || '', placeholder: 'Ex : Force / Hypertrophie / Power-up bench' }),
+    ));
+
+    form.appendChild(el('div', {},
+      el('label', {}, 'Notes (facultatif)'),
+      el('textarea', { name: 'notes', placeholder: 'Ressenti, exercices clés, axes pour la prochaine fois…' }, l.notes || ''),
+    ));
+
+    form.appendChild(el('p', { class: 'form-hint' },
+      '💡 Tes détails (séries, reps, charges) restent dans Hevy. Athelio retient juste le rythme et les groupes travaillés.'));
+
+    form.appendChild(el('div', { class: 'form-actions' },
+      el('button', { type: 'button', class: 'btn secondary', onClick: close }, 'Annuler'),
+      el('button', { type: 'submit', class: 'btn' }, 'Enregistrer'),
+    ));
+
     return form;
   });
 }
@@ -1285,54 +1481,216 @@ function openMeasurementForm() {
 
 // ---------- Photos ----------
 
+let photosTab = 'all';
+
 views.photos = () => {
   const wrap = el('div');
-  wrap.appendChild(viewHeader('Photos', 'Avant / après — documente ta transformation visuellement.',
-    el('label', { class: 'btn', style: 'cursor: pointer;' }, '+ Ajouter une photo',
-      el('input', { type: 'file', accept: 'image/*', hidden: '', onChange: (e) => addPhoto(e.target.files[0]) }))));
+  const actions = photosTab === 'all'
+    ? el('label', { class: 'btn', style: 'cursor: pointer;' }, '+ Ajouter une photo',
+        el('input', { type: 'file', accept: 'image/*', hidden: '', onChange: (e) => addPhoto(e.target.files[0]) }))
+    : el('button', { class: 'btn', onClick: () => openComparisonForm() }, '+ Nouvelle comparaison');
 
-  const card = el('div', { class: 'card' });
-  const photos = [...state.photos].sort((a, b) => b.date.localeCompare(a.date));
-  if (!photos.length) {
-    card.appendChild(emptyState('Aucune photo', 'Ajoute une première photo pour démarrer ton suivi.'));
-  } else {
-    const grid = el('div', { class: 'photo-grid' });
-    photos.forEach(p => {
-      grid.appendChild(el('div', { class: 'photo-card' },
-        el('img', { src: p.data, alt: p.label }),
-        el('div', { class: 'photo-meta' },
-          el('div', {},
-            el('div', { style: 'font-weight: 600;' }, p.label || fmtDate(p.date)),
-            el('div', { style: 'color: var(--text-dim); font-size: 11px;' }, fmtDate(p.date)),
+  wrap.appendChild(viewHeader('Photos', 'Documente ta transformation visuellement.', actions));
+
+  const tabs = el('div', { class: 'tabs' },
+    el('button', { class: `tab ${photosTab === 'all' ? 'active' : ''}`, onClick: () => { photosTab = 'all'; navigate('photos'); } }, 'Photos'),
+    el('button', { class: `tab ${photosTab === 'compare' ? 'active' : ''}`, onClick: () => { photosTab = 'compare'; navigate('photos'); } }, `Avant / Après${state.comparisons.length ? ' (' + state.comparisons.length + ')' : ''}`),
+  );
+  wrap.appendChild(tabs);
+
+  if (photosTab === 'all') {
+    const card = el('div', { class: 'card' });
+    const photos = [...state.photos].sort((a, b) => b.date.localeCompare(a.date));
+    if (!photos.length) {
+      card.appendChild(emptyState('Aucune photo', 'Ajoute une première photo pour démarrer ton suivi.'));
+    } else {
+      const grid = el('div', { class: 'photo-grid' });
+      photos.forEach(p => {
+        grid.appendChild(el('div', { class: 'photo-card' },
+          el('img', { src: p.data, alt: p.label }),
+          el('div', { class: 'photo-meta' },
+            el('div', {},
+              el('div', { style: 'font-weight: 600;' }, p.label || fmtDate(p.date)),
+              el('div', { style: 'color: var(--text-dim); font-size: 11px;' }, fmtDate(p.date)),
+            ),
+            el('button', { class: 'icon-btn danger', onClick: () => {
+              state.photos = state.photos.filter(x => x.id !== p.id);
+              save(); navigate('photos');
+            } }, '✕'),
           ),
-          el('button', { class: 'icon-btn danger', onClick: () => {
-            state.photos = state.photos.filter(x => x.id !== p.id);
-            save(); navigate('photos');
-          } }, '✕'),
-        ),
-      ));
-    });
-    card.appendChild(grid);
+        ));
+      });
+      card.appendChild(grid);
+    }
+    wrap.appendChild(card);
+  } else {
+    // Onglet "Avant / Après"
+    const comps = [...state.comparisons].sort((a, b) => b.date.localeCompare(a.date));
+    if (!comps.length) {
+      const card = el('div', { class: 'card' });
+      card.appendChild(emptyState('Aucune comparaison', 'Crée ta première comparaison avant/après pour visualiser tes progrès côte à côte.'));
+      wrap.appendChild(card);
+    } else {
+      comps.forEach(c => wrap.appendChild(comparisonCard(c)));
+    }
   }
-  wrap.appendChild(card);
+
   return wrap;
 };
 
-function addPhoto(file) {
+function comparisonCard(c) {
+  return el('div', { class: 'card compare-card' },
+    el('div', { class: 'compare-head' },
+      el('div', {},
+        el('div', { class: 'compare-title' }, c.title || `Comparaison du ${fmtDate(c.date)}`),
+        el('div', { class: 'compare-date' }, fmtDate(c.date)),
+      ),
+      el('div', { class: 'actions' },
+        el('button', { class: 'icon-btn', onClick: () => openComparisonForm(c) }, '✎'),
+        el('button', { class: 'icon-btn danger', onClick: () => confirmAction('Supprimer cette comparaison ?', () => {
+          state.comparisons = state.comparisons.filter(x => x.id !== c.id);
+          save(); navigate('photos'); toast('Comparaison supprimée');
+        }) }, '✕'),
+      ),
+    ),
+    el('div', { class: 'compare-canvas' },
+      el('div', { class: 'compare-side' },
+        el('div', { class: 'compare-label' }, c.beforeLabel || 'Avant'),
+        el('div', { class: 'compare-img-wrap' },
+          el('img', { src: c.beforeData, alt: 'avant', loading: 'lazy', onClick: () => openImageZoom(c.beforeData) }),
+        ),
+      ),
+      el('div', { class: 'compare-side' },
+        el('div', { class: 'compare-label after' }, c.afterLabel || 'Après'),
+        el('div', { class: 'compare-img-wrap' },
+          el('img', { src: c.afterData, alt: 'après', loading: 'lazy', onClick: () => openImageZoom(c.afterData) }),
+        ),
+      ),
+    ),
+    c.notes ? el('div', { class: 'compare-notes' }, c.notes) : null,
+  );
+}
+
+function openImageZoom(src) {
+  const root = $('#modal-root');
+  const overlay = el('div', { class: 'image-zoom', onClick: () => overlay.remove() },
+    el('img', { src }),
+  );
+  root.appendChild(overlay);
+}
+
+// Compresse une image (max 1400px, JPEG 85 %) — économise ~95 % du localStorage
+function compressImage(file, maxW = 1400, quality = 0.85) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      const scale = Math.min(1, maxW / Math.max(img.width, img.height));
+      const w = Math.round(img.width * scale);
+      const h = Math.round(img.height * scale);
+      const c = document.createElement('canvas');
+      c.width = w; c.height = h;
+      c.getContext('2d').drawImage(img, 0, 0, w, h);
+      URL.revokeObjectURL(img.src);
+      resolve(c.toDataURL('image/jpeg', quality));
+    };
+    img.onerror = (e) => { URL.revokeObjectURL(img.src); reject(e); };
+    img.src = URL.createObjectURL(file);
+  });
+}
+
+async function addPhoto(file) {
   if (!file) return;
-  if (file.size > 3_000_000) { toast('Image trop grande (max 3 MB)'); return; }
-  const reader = new FileReader();
-  reader.onload = (e) => {
+  try {
+    const data = await compressImage(file);
     const label = prompt('Légende (facultatif) :') || '';
-    state.photos.push({
-      id: id(),
-      date: today(),
-      label, data: e.target.result,
-    });
+    state.photos.push({ id: id(), date: today(), label, data });
     if (!save()) { state.photos.pop(); return; }
     navigate('photos'); toast('Photo ajoutée');
-  };
-  reader.readAsDataURL(file);
+  } catch { toast('Impossible de charger cette image.'); }
+}
+
+function openComparisonForm(existing) {
+  let beforeData = existing?.beforeData || null;
+  let afterData  = existing?.afterData  || null;
+
+  openModal(existing ? 'Modifier la comparaison' : 'Nouvelle comparaison avant/après', (close) => {
+    const form = el('form', { class: 'form', onSubmit: (e) => {
+      e.preventDefault();
+      const d = Object.fromEntries(new FormData(e.target));
+      if (!beforeData || !afterData) { toast('Sélectionne les deux photos.'); return; }
+      const entry = {
+        id: existing?.id || id(),
+        date: d.date,
+        title: (d.title || '').trim(),
+        beforeLabel: (d.beforeLabel || '').trim() || 'Avant',
+        afterLabel:  (d.afterLabel  || '').trim() || 'Après',
+        beforeData, afterData,
+        notes: (d.notes || '').trim(),
+      };
+      if (existing) state.comparisons = state.comparisons.map(x => x.id === entry.id ? entry : x);
+      else state.comparisons.push(entry);
+      if (!save()) {
+        if (!existing) state.comparisons.pop();
+        toast('Stockage saturé — supprime des photos pour libérer de la place.');
+        return;
+      }
+      close(); navigate('photos'); toast(existing ? 'Comparaison mise à jour' : 'Comparaison créée');
+    } });
+
+    const previewBefore = el('div', { class: 'compare-thumb', id: 'thumb-before' },
+      beforeData ? el('img', { src: beforeData }) : el('span', {}, '🖼️ Aucune photo'));
+    const previewAfter = el('div', { class: 'compare-thumb', id: 'thumb-after' },
+      afterData ? el('img', { src: afterData }) : el('span', {}, '🖼️ Aucune photo'));
+
+    const pickAndCompress = (which, previewEl) => async (e) => {
+      const f = e.target.files[0]; if (!f) return;
+      try {
+        previewEl.innerHTML = '<span>⏳ Compression…</span>';
+        const data = await compressImage(f);
+        if (which === 'before') beforeData = data; else afterData = data;
+        previewEl.innerHTML = ''; previewEl.appendChild(el('img', { src: data }));
+      } catch { toast('Image invalide.'); }
+    };
+
+    const dateVal = existing?.date || today();
+    form.appendChild(el('div', { class: 'form-row' },
+      el('div', {}, el('label', {}, 'Date'), el('input', { type: 'date', name: 'date', value: dateVal, required: '' })),
+      el('div', {}, el('label', {}, 'Titre (facultatif)'), el('input', { type: 'text', name: 'title', value: existing?.title || '', placeholder: 'Ex : 3 mois de muscu' })),
+    ));
+
+    form.appendChild(el('div', { class: 'compare-picker' },
+      el('div', {},
+        el('label', {}, 'Photo « avant »'),
+        previewBefore,
+        el('label', { class: 'btn small secondary', style: 'cursor: pointer; display: block; text-align: center; margin-top: 6px;' },
+          beforeData ? 'Remplacer' : 'Choisir depuis la galerie',
+          el('input', { type: 'file', accept: 'image/*', hidden: '', onChange: pickAndCompress('before', previewBefore) }),
+        ),
+        el('input', { type: 'text', name: 'beforeLabel', value: existing?.beforeLabel || 'Avant', placeholder: 'Légende', style: 'margin-top: 6px;' }),
+      ),
+      el('div', {},
+        el('label', {}, 'Photo « après »'),
+        previewAfter,
+        el('label', { class: 'btn small secondary', style: 'cursor: pointer; display: block; text-align: center; margin-top: 6px;' },
+          afterData ? 'Remplacer' : 'Choisir depuis la galerie',
+          el('input', { type: 'file', accept: 'image/*', hidden: '', onChange: pickAndCompress('after', previewAfter) }),
+        ),
+        el('input', { type: 'text', name: 'afterLabel', value: existing?.afterLabel || 'Après', placeholder: 'Légende', style: 'margin-top: 6px;' }),
+      ),
+    ));
+
+    form.appendChild(el('div', {},
+      el('label', {}, 'Notes'),
+      el('textarea', { name: 'notes', placeholder: 'Ressenti, mesures, conditions de prise de vue…' }, existing?.notes || ''),
+    ));
+
+    form.appendChild(el('div', { class: 'form-actions' },
+      el('button', { type: 'button', class: 'btn secondary', onClick: close }, 'Annuler'),
+      el('button', { type: 'submit', class: 'btn' }, 'Enregistrer'),
+    ));
+
+    return form;
+  });
 }
 
 // ---------- Vidéos ----------
@@ -1523,7 +1881,7 @@ const GOAL_METRICS = {
   manual:   { label: 'Manuel (je gère le %)', unit: '' },
   weight:   { label: 'Poids cible', unit: 'kg', hint: 'La progression se calcule depuis ton poids de départ jusqu\'à la cible.' },
   distance: { label: 'Distance de course cumulée', unit: 'km', hint: 'Cumul des kilomètres courus à partir de la création de l\'objectif.' },
-  lift:     { label: 'Charge max (muscu)', unit: 'kg', hint: 'Plus haute charge enregistrée pour l\'exercice indiqué.' },
+  lifts:    { label: 'Séances de muscu cumulées', unit: 'séances', hint: 'Nombre de séances de musculation enregistrées à partir de la création.' },
   sobriety: { label: 'Jours sains (sobriété)', unit: 'jours', hint: 'Nombre de jours sans écart enregistrés à partir de la création.' },
   mobility: { label: 'Séances de mobilité', unit: 'séances', hint: 'Nombre de séances de mobilité à partir de la création.' },
 };
@@ -1552,11 +1910,7 @@ function computeGoalProgress(g) {
     return { pct, detail: `${current} / ${target} kg`, auto: true };
   }
   if (metric === 'distance') return count(state.runs.filter(r => r.date >= start).reduce((s, r) => s + (r.distance || 0), 0), g.target);
-  if (metric === 'lift') {
-    const ex = (g.exercise || '').toLowerCase();
-    const max = state.lifts.filter(l => !ex || (l.exercise || '').toLowerCase().includes(ex)).reduce((m, l) => Math.max(m, l.weight || 0), 0);
-    return count(max, g.target);
-  }
+  if (metric === 'lifts')    return count(state.lifts.filter(l => l.date >= start).length, g.target);
   if (metric === 'sobriety') return count(state.sobriety.filter(s => !s.hasSlip && s.date >= start).length, g.target);
   if (metric === 'mobility') return count(state.mobility.filter(m => m.date >= start).length, g.target);
   return { pct: 0, detail: '', auto: true };
@@ -1611,7 +1965,6 @@ function openGoalForm(existing) {
       } else {
         entry.target = +d.target || 0;
         entry.start = existing?.start || today();
-        if (metric === 'lift') entry.exercise = (d.exercise || '').trim();
         if (metric === 'weight') entry.baseline = existing?.baseline ?? (state.weight.at(-1)?.value ?? entry.target);
       }
       if (existing) state.goals = state.goals.map(x => x.id === entry.id ? entry : x);
@@ -1626,9 +1979,8 @@ function openGoalForm(existing) {
       <div class="goal-manual"${(g.metric || 'manual') !== 'manual' ? ' hidden' : ''}>
         <label>Progression (%)</label><input type="number" min="0" max="100" name="progress" value="${g.progress || 0}">
       </div>
-      <div class="goal-auto form-row"${(g.metric || 'manual') === 'manual' ? ' hidden' : ''}>
-        <div><label>Cible</label><input type="number" step="0.1" name="target" value="${g.target ?? ''}" placeholder="Valeur à atteindre"></div>
-        <div class="goal-exercise"${g.metric !== 'lift' ? ' hidden' : ''}><label>Exercice</label><input type="text" name="exercise" value="${(g.exercise || '').replace(/"/g, '&quot;')}" placeholder="Ex : Squat"></div>
+      <div class="goal-auto"${(g.metric || 'manual') === 'manual' ? ' hidden' : ''}>
+        <label>Cible</label><input type="number" step="0.1" name="target" value="${g.target ?? ''}" placeholder="Valeur à atteindre">
       </div>
       <p class="form-hint goal-hint"></p>
       <div><label>Échéance</label><input type="date" name="deadline" value="${g.deadline || ''}" required></div>
@@ -1640,14 +1992,12 @@ function openGoalForm(existing) {
     const sel = form.querySelector('select[name=metric]');
     const manual = form.querySelector('.goal-manual');
     const auto = form.querySelector('.goal-auto');
-    const exo = form.querySelector('.goal-exercise');
     const hint = form.querySelector('.goal-hint');
     const targetInput = form.querySelector('input[name=target]');
     const sync = () => {
       const m = sel.value;
       manual.hidden = m !== 'manual';
       auto.hidden = m === 'manual';
-      exo.hidden = m !== 'lift';
       hint.textContent = GOAL_METRICS[m]?.hint || '';
       const u = GOAL_METRICS[m]?.unit;
       if (u) targetInput.placeholder = `Cible en ${u}`;
