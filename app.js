@@ -15,6 +15,7 @@ const defaultState = {
   recovery: [],
   videos: [],
   mobility: [],
+  mobilityVideos: [],
   sobriety: [],
   comparisons: [],
 };
@@ -46,7 +47,7 @@ function migrate(parsed) {
   s.photos = parsed.photos || old.photos || [];
   delete s.progression;
   s.badminton = { ...defaultState.badminton, ...(parsed.badminton || {}) };
-  for (const k of ['weight', 'measurements', 'runs', 'lifts', 'photos', 'goals', 'recovery', 'videos', 'mobility', 'sobriety', 'comparisons']) {
+  for (const k of ['weight', 'measurements', 'runs', 'lifts', 'photos', 'goals', 'recovery', 'videos', 'mobility', 'mobilityVideos', 'sobriety', 'comparisons']) {
     if (!Array.isArray(s[k])) s[k] = [];
   }
   if (!Array.isArray(s.badminton.matches)) s.badminton.matches = [];
@@ -373,8 +374,8 @@ async function driveBackupNow(onStatus = () => {}) {
   await driveAuth({ silent: false });
   const folderId = await driveFolderId();
 
-  // 1) Uploader les vidéos qui n'ont pas encore de driveFileId
-  const vids = state.videos.filter(v => v.blobKey && !v.driveFileId);
+  // 1) Uploader les vidéos qui n'ont pas encore de driveFileId (videos + mobilityVideos)
+  const vids = [...state.videos, ...state.mobilityVideos].filter(v => v.blobKey && !v.driveFileId);
   for (let i = 0; i < vids.length; i++) {
     const v = vids[i];
     onStatus(`📹 Vidéo ${i + 1}/${vids.length}…`);
@@ -406,8 +407,8 @@ async function driveRestoreFromFile(fileId, onStatus = () => {}) {
   const data = await driveDownloadJson(fileId);
   const restored = migrate(data);
 
-  // Récupérer les blobs vidéo manquants depuis Drive
-  const vids = (restored.videos || []).filter(v => v.driveFileId && v.blobKey);
+  // Récupérer les blobs vidéo manquants depuis Drive (videos + mobilityVideos)
+  const vids = [...(restored.videos || []), ...(restored.mobilityVideos || [])].filter(v => v.driveFileId && v.blobKey);
   for (let i = 0; i < vids.length; i++) {
     const v = vids[i];
     const present = await idbGet(STORE_BLOBS, v.blobKey).catch(() => null);
@@ -1749,7 +1750,9 @@ views.videos = () => {
   return wrap;
 };
 
-function videoCard(v) {
+function videoCard(v, opts = {}) {
+  const stateKey = opts.stateKey || 'videos';
+  const navView = opts.navView || 'videos';
   return el('div', { class: 'video-card' },
     el('div', { class: 'video-embed' }, videoEmbed(v)),
     el('div', { class: 'video-info' },
@@ -1760,7 +1763,7 @@ function videoCard(v) {
         ),
         el('button', { class: 'icon-btn danger', onClick: async () => {
           if (v.blobKey) { try { await idbDel(STORE_BLOBS, v.blobKey); } catch {} }
-          state.videos = state.videos.filter(x => x.id !== v.id); save(); navigate('videos'); toast('Vidéo supprimée');
+          state[stateKey] = state[stateKey].filter(x => x.id !== v.id); save(); navigate(navView); toast('Vidéo supprimée');
         } }, '✕'),
       ),
       v.notes ? el('div', { class: 'video-notes' }, v.notes) : null,
@@ -1768,7 +1771,9 @@ function videoCard(v) {
   );
 }
 
-function openVideoForm() {
+function openVideoForm(opts = {}) {
+  const stateKey = opts.stateKey || 'videos';
+  const navView = opts.navView || 'videos';
   openModal('Ajouter une vidéo', (close) => {
     let pendingFile = null;
     const form = el('form', { class: 'form', onSubmit: async (e) => {
@@ -1789,13 +1794,13 @@ function openVideoForm() {
           return;
         }
       }
-      state.videos.push(entry);
+      state[stateKey].push(entry);
       if (!save()) {
-        state.videos.pop();
+        state[stateKey].pop();
         if (entry.blobKey) { try { await idbDel(STORE_BLOBS, entry.blobKey); } catch {} }
         return;
       }
-      close(); navigate('videos'); toast('Vidéo ajoutée');
+      close(); navigate(navView); toast('Vidéo ajoutée');
     } });
     form.innerHTML = `
       <div class="form-row">
@@ -2105,7 +2110,9 @@ function openRecoveryForm() {
 views.mobility = () => {
   const wrap = el('div');
   wrap.appendChild(viewHeader('Mobilité', 'Travaille ta souplesse et ton amplitude pour rester en forme et prévenir les blessures.',
-    el('button', { class: 'btn', onClick: () => openMobilityForm() }, '+ Nouvelle séance')));
+    el('button', { class: 'btn', onClick: () => openMobilityForm() }, '+ Nouvelle séance'),
+    el('button', { class: 'btn secondary', onClick: () => openVideoForm({ stateKey: 'mobilityVideos', navView: 'mobility' }) }, '+ Ajouter une vidéo'),
+  ));
 
   const arr = [...state.mobility].sort((a, b) => a.date.localeCompare(b.date));
   const last = arr.at(-1);
@@ -2136,6 +2143,18 @@ views.mobility = () => {
     )));
   }
   wrap.appendChild(list);
+
+  // Galerie vidéos de mobilité (même format que la section Vidéos : lien YT/Vimeo/Drive ou fichier local)
+  const vidsCard = el('div', { class: 'card', style: 'margin-top: 16px;' }, el('h3', {}, '🎥 Vidéos de mobilité'));
+  const vids = [...state.mobilityVideos].sort((a, b) => b.date.localeCompare(a.date));
+  if (!vids.length) {
+    vidsCard.appendChild(emptyState('Aucune vidéo', 'Ajoute un lien ou un fichier vidéo (étirements, routines, démos…).'));
+  } else {
+    const grid = el('div', { class: 'video-grid' });
+    vids.forEach(v => grid.appendChild(videoCard(v, { stateKey: 'mobilityVideos', navView: 'mobility' })));
+    vidsCard.appendChild(grid);
+  }
+  wrap.appendChild(vidsCard);
 
   return wrap;
 };
