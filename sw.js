@@ -1,5 +1,5 @@
 // Athelio — service worker (offline-first)
-const CACHE = 'athelio-v7';
+const CACHE = 'athelio-v8';
 const ASSETS = [
   './',
   './index.html',
@@ -55,12 +55,29 @@ self.addEventListener('fetch', (e) => {
   // Navigation : réseau d'abord, puis cache (toujours afficher l'app hors-ligne)
   if (req.mode === 'navigate') {
     e.respondWith(
-      fetch(req).catch(() => caches.match('./index.html'))
+      fetch(req).then((res) => {
+        const copy = res.clone();
+        caches.open(CACHE).then((c) => c.put('./index.html', copy)).catch(() => {});
+        return res;
+      }).catch(() => caches.match('./index.html'))
     );
     return;
   }
 
-  // Reste : cache d'abord, sinon réseau (et on met en cache au passage)
+  // Code de l'app (même origine) : réseau d'abord, fallback cache (sinon update jamais prise)
+  const sameOrigin = new URL(url).origin === self.location.origin;
+  if (sameOrigin && /\.(js|css|html|webmanifest)(\?.*)?$/i.test(url)) {
+    e.respondWith(
+      fetch(req).then((res) => {
+        const copy = res.clone();
+        caches.open(CACHE).then((c) => c.put(req, copy)).catch(() => {});
+        return res;
+      }).catch(() => caches.match(req))
+    );
+    return;
+  }
+
+  // Reste (icônes, CDN figé…) : cache d'abord, sinon réseau (et on met en cache au passage)
   e.respondWith(
     caches.match(req).then((cached) => {
       if (cached) return cached;
