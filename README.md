@@ -44,25 +44,68 @@ Chaque domaine a son propre module dans la barre latérale.
 ## Sports suivis
 Badminton · Course à pied · Musculation
 
-## Lancer l'app
+## Lancer l'app dans le navigateur
 
-Pas de build, pas de dépendance à installer.
+Pas de build nécessaire pour la version web.
 
 ```bash
 # Option 1 : ouvrir directement
-open index.html
+open www/index.html
 
-# Option 2 : serveur local
-python3 -m http.server 8000
+# Option 2 : serveur local (recommandé pour les Service Workers / PWA)
+npm install        # première fois
+npm run serve
 # puis http://localhost:8000
 ```
+
+## Installer comme une vraie app (Capacitor)
+
+Le projet est packagé avec [Capacitor](https://capacitorjs.com/) : ton code web reste la
+source de vérité, et il est enrobé dans un projet Xcode (iOS) et Android Studio (Android).
+
+### Pré-requis
+- Node.js 18+
+- macOS + Xcode + CocoaPods (`sudo gem install cocoapods`) pour iOS
+- Android Studio pour Android
+- Mode développeur activé sur l'iPhone (Réglages → Confidentialité → Mode développeur)
+
+### Première installation
+
+```bash
+npm install                # installe Capacitor et ses plugins
+npx cap sync               # copie le web dans ios/ et android/
+```
+
+### Pousser une mise à jour sur ton téléphone
+
+À chaque fois que tu modifies un fichier dans `www/` :
+
+```bash
+npx cap sync               # synchronise les changements
+npx cap open ios           # ouvre Xcode  →  Run (▶︎) sur ton iPhone branché
+# ou
+npx cap open android       # ouvre Android Studio  →  Run sur ton Android
+```
+
+Avec un Apple ID gratuit, la signature iOS dure 7 jours. Avec un compte Apple Developer
+(99 €/an), elle dure 1 an. Sur Android, aucun store ni compte n'est requis pour sideloader.
 
 ## Stack
 
 - HTML, CSS, JavaScript (vanilla)
 - [Chart.js](https://www.chartjs.org/) via CDN pour les graphiques
 - `localStorage` pour la persistance — toutes tes données restent sur ton appareil
+- [Capacitor](https://capacitorjs.com/) pour l'empaquetage en app native (iOS + Android)
 - Import / export JSON pour sauvegarde et portabilité
+
+## Structure
+
+```
+www/              ← code de l'app (HTML / CSS / JS, icônes, manifest)
+ios/              ← projet Xcode généré par Capacitor (ouvrir App.xcworkspace)
+android/          ← projet Android Studio généré par Capacitor
+capacitor.config  ← config Capacitor (nom, splash, status bar…)
+```
 
 ## Données
 

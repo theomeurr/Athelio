@@ -1,0 +1,30 @@
+{
+  "appId": "com.athelio.app",
+  "appName": "Athelio",
+  "webDir": "www",
+  "backgroundColor": "#0b0f14",
+  "ios": {
+    "contentInset": "never",
+    "scrollEnabled": true,
+    "limitsNavigationsToAppBoundDomains": false
+  },
+  "server": {
+    "iosScheme": "athelio"
+  },
+  "plugins": {
+    "SplashScreen": {
+      "launchAutoHide": true,
+      "launchShowDuration": 800,
+      "backgroundColor": "#0b0f14",
+      "androidSplashResourceName": "splash",
+      "iosSpinnerStyle": "small",
+      "spinnerColor": "#ff5b2e",
+      "showSpinner": false
+    },
+    "StatusBar": {
+      "style": "DARK",
+      "backgroundColor": "#0b0f14",
+      "overlaysWebView": true
+    }
+  }
+}

@@ -19,6 +19,11 @@
 
 * { box-sizing: border-box; }
 html, body { height: 100%; }
+html {
+  -webkit-text-size-adjust: 100%;
+  -webkit-tap-highlight-color: transparent;
+  overscroll-behavior: none;
+}
 body {
   margin: 0;
   font-family: 'Inter', system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
@@ -29,21 +34,34 @@ body {
   display: grid;
   grid-template-columns: 260px 1fr;
   min-height: 100vh;
+  min-height: 100dvh;
   -webkit-font-smoothing: antialiased;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+  overscroll-behavior: none;
+  padding-top: env(safe-area-inset-top);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+input, textarea, [contenteditable] {
+  -webkit-user-select: auto;
+  user-select: auto;
 }
 
 /* Sidebar */
 .sidebar {
   background: linear-gradient(180deg, var(--bg-2), #0c1218);
   border-right: 1px solid var(--border);
-  padding: 22px 16px;
+  padding: calc(22px + env(safe-area-inset-top)) 16px calc(22px + env(safe-area-inset-bottom));
   display: flex;
   flex-direction: column;
   gap: 22px;
   position: sticky;
   top: 0;
   height: 100vh;
+  height: 100dvh;
   overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
 }
 .brand {
   display: flex;
@@ -175,9 +193,27 @@ body {
 }
 @media (max-width: 720px) {
   body { grid-template-columns: 1fr; }
-  .sidebar { position: relative; height: auto; }
-  #main { padding: 20px; }
+  .sidebar {
+    position: relative;
+    height: auto;
+    padding: calc(16px + env(safe-area-inset-top)) 16px 16px;
+  }
+  #nav {
+    flex-direction: row;
+    overflow-x: auto;
+    gap: 6px;
+    flex: none;
+    scrollbar-width: none;
+  }
+  #nav::-webkit-scrollbar { display: none; }
+  .nav-btn { white-space: nowrap; flex-shrink: 0; }
+  .sidebar-footer { flex-direction: row; flex-wrap: wrap; }
+  .ghost-btn { flex: 1; text-align: center; }
+  #main {
+    padding: 20px 16px calc(40px + env(safe-area-inset-bottom));
+  }
   .grid.cols-2, .grid.cols-3, .grid.cols-4 { grid-template-columns: 1fr; }
+  .view-header h2 { font-size: 22px; }
 }
 
 /* KPI */

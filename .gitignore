@@ -1,0 +1,29 @@
+# Dependencies
+node_modules/
+package-lock.json
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editors
+.vscode/
+.idea/
+*.swp
+
+# Capacitor — iOS build artifacts (gardés en local, régénérés via cap add)
+ios/App/Pods/
+ios/App/build/
+ios/App/Podfile.lock
+ios/.gitignore
+
+# Capacitor — Android build artifacts
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+android/.idea/
+
+# Logs
+*.log
+npm-debug.log*

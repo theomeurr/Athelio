@@ -1,0 +1,24 @@
+{
+  "name": "athelio",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Athelio — Suis ton évolution, domine ton sport.",
+  "scripts": {
+    "serve": "http-server www -p 8000 -c-1",
+    "cap:sync": "cap sync",
+    "cap:ios": "cap open ios",
+    "cap:android": "cap open android",
+    "cap:add:ios": "cap add ios",
+    "cap:add:android": "cap add android"
+  },
+  "dependencies": {
+    "@capacitor/core": "^6.1.2",
+    "@capacitor/ios": "^6.1.2",
+    "@capacitor/android": "^6.1.2",
+    "@capacitor/splash-screen": "^6.0.2",
+    "@capacitor/status-bar": "^6.0.1"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^6.1.2"
+  }
+}
