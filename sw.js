@@ -1,5 +1,5 @@
 // Athelio — service worker (offline-first)
-const CACHE = 'athelio-v9';
+const CACHE = 'athelio-v10';
 const ASSETS = [
   './',
   './index.html',

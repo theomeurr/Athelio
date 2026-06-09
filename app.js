@@ -80,6 +80,18 @@ function matchScoreLabel(m) {
   if (!sets.length) return '—';
   return sets.map(s => `${s.me}-${s.opp}`).join(' / ');
 }
+function isDoubles(m) { return m.type === 'double' || m.type === 'mixte'; }
+function matchOpponentLabel(m) {
+  if (isDoubles(m)) {
+    const opps = [m.opponent, m.opponent2].map(x => (x || '').trim()).filter(Boolean);
+    return opps.length ? opps.join(' + ') : '—';
+  }
+  return (m.opponent || '').trim() || '—';
+}
+function matchPartnerLabel(m) {
+  if (isDoubles(m) && (m.partner || '').trim()) return `avec ${m.partner.trim()}`;
+  return '';
+}
 
 function save() {
   try {
@@ -811,9 +823,14 @@ views.badminton = () => {
         const resBadge = result === 'win' ? '<span class="badge win">Victoire</span>'
                        : result === 'loss' ? '<span class="badge loss">Défaite</span>'
                        : '<span class="badge neutral">Égalité</span>';
+        const partnerLbl = matchPartnerLabel(m);
+        const oppCell = el('td', {},
+          el('div', {}, matchOpponentLabel(m)),
+          partnerLbl ? el('div', { style: 'font-size: 11px; color: var(--text-dim); margin-top: 2px;' }, partnerLbl) : null,
+        );
         tbody.appendChild(el('tr', {},
           el('td', {}, fmtDate(m.date)),
-          el('td', {}, m.opponent || '—'),
+          oppCell,
           el('td', { html: `<span class="badge neutral">${m.type}</span>` }),
           el('td', { style: 'white-space: nowrap;' }, `${setsWon.me}–${setsWon.opp}`),
           el('td', { style: 'white-space: nowrap;' }, matchScoreLabel(m)),
@@ -903,7 +920,7 @@ function tabBtn(key, label, onClick) {
 
 function openMatchForm(existing) {
   const initialSets = existing?.sets?.length ? existing.sets.map(s => ({ me: s.me, opp: s.opp })) : [{ me: 21, opp: 0 }];
-  const m = existing || { date: today(), opponent: '', type: 'simple', goodPoints: '', badPoints: '', workPoints: '' };
+  const m = existing || { date: today(), opponent: '', opponent2: '', partner: '', type: 'simple', goodPoints: '', badPoints: '', workPoints: '' };
   let sets = initialSets;
 
   openModal(existing ? 'Modifier le match' : 'Nouveau match', (close) => {
@@ -919,10 +936,13 @@ function openMatchForm(existing) {
         if (!isNaN(me) && !isNaN(opp) && (me > 0 || opp > 0)) cleanSets.push({ me, opp });
       });
       if (!cleanSets.length) { toast('Saisis au moins un set.'); return; }
+      const isDbl = data.type === 'double' || data.type === 'mixte';
       const entry = {
         id: existing?.id || id(),
         date: data.date,
         opponent: data.opponent.trim(),
+        opponent2: isDbl ? (data.opponent2 || '').trim() : '',
+        partner: isDbl ? (data.partner || '').trim() : '',
         type: data.type,
         sets: cleanSets,
         goodPoints: data.goodPoints.trim(),
@@ -970,7 +990,18 @@ function openMatchForm(existing) {
           <option value="mixte" ${m.type === 'mixte' ? 'selected' : ''}>Mixte</option>
         </select></div>
       </div>
-      <div><label>Adversaire</label><input type="text" name="opponent" value="${m.opponent || ''}" placeholder="Nom ou équipe"></div>
+      <div class="dbl-partner-row"${isDoubles(m) ? '' : ' hidden'}>
+        <label>Mon coéquipier</label>
+        <input type="text" name="partner" value="${(m.partner || '').replace(/"/g, '&quot;')}" placeholder="Nom du partenaire">
+      </div>
+      <div class="opp-row">
+        <label class="opp-label">${isDoubles(m) ? 'Adversaire 1' : 'Adversaire'}</label>
+        <input type="text" name="opponent" value="${(m.opponent || '').replace(/"/g, '&quot;')}" placeholder="Nom de l'adversaire">
+      </div>
+      <div class="dbl-opp2-row"${isDoubles(m) ? '' : ' hidden'}>
+        <label>Adversaire 2</label>
+        <input type="text" name="opponent2" value="${(m.opponent2 || '').replace(/"/g, '&quot;')}" placeholder="Nom du 2e adversaire">
+      </div>
       <div>
         <label>Scores par set</label>
         <div style="display: grid; grid-template-columns: 28px 1fr 1fr auto; gap: 8px; font-size: 11px; color: var(--text-dim); padding: 0 0 4px; text-transform: uppercase; letter-spacing: 0.5px;">
@@ -987,6 +1018,20 @@ function openMatchForm(existing) {
         <button type="submit" class="btn">Enregistrer</button>
       </div>
     `;
+    // Affichage conditionnel des champs partenaire / 2e adversaire selon le type
+    const typeSel = form.querySelector('select[name=type]');
+    const partnerRow = form.querySelector('.dbl-partner-row');
+    const opp2Row = form.querySelector('.dbl-opp2-row');
+    const oppLabel = form.querySelector('.opp-label');
+    const syncDoublesFields = () => {
+      const dbl = typeSel.value === 'double' || typeSel.value === 'mixte';
+      partnerRow.hidden = !dbl;
+      opp2Row.hidden = !dbl;
+      oppLabel.textContent = dbl ? 'Adversaire 1' : 'Adversaire';
+    };
+    typeSel.addEventListener('change', syncDoublesFields);
+    syncDoublesFields();
+
     // Render initial des sets
     renderSets();
     // Bouton "+ Ajouter un set"
