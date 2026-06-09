@@ -2472,6 +2472,7 @@ views.settings = () => {
     el('div', { style: 'display: flex; gap: 8px; flex-wrap: wrap;' },
       el('button', { class: 'btn', onClick: exportData }, '⤓ Exporter maintenant'),
       el('button', { class: 'btn secondary', onClick: () => $('#import-file').click() }, '⤒ Importer un export'),
+      el('button', { class: 'btn secondary danger', onClick: resetData }, '⟲ Réinitialiser toutes les données'),
     ),
     el('h3', { style: 'margin-top: 18px;' }, 'Historique automatique'),
     el('p', { style: 'color: var(--text-dim); font-size: 13px; margin: 0 0 10px;' },
@@ -3034,10 +3035,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 
   $$('.nav-btn').forEach(b => b.addEventListener('click', () => { navigate(b.dataset.view); closeNav(); }));
-  $('#export-btn').addEventListener('click', exportData);
-  $('#import-btn').addEventListener('click', () => $('#import-file').click());
   $('#import-file').addEventListener('change', (e) => { if (e.target.files[0]) importData(e.target.files[0]); });
-  $('#reset-btn').addEventListener('click', resetData);
   const settingsBtn = $('#settings-btn');
   if (settingsBtn) settingsBtn.addEventListener('click', () => { navigate('settings'); closeNav(); });
 
