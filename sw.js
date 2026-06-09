@@ -1,5 +1,5 @@
 // Athelio — service worker (offline-first)
-const CACHE = 'athelio-v5';
+const CACHE = 'athelio-v6';
 const ASSETS = [
   './',
   './index.html',
@@ -24,6 +24,22 @@ self.addEventListener('activate', (e) => {
       .then((keys) => Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k))))
       .then(() => self.clients.claim())
   );
+});
+
+// Clic sur une notification : focus la fenêtre Athelio si ouverte, sinon ouvre l'app.
+self.addEventListener('notificationclick', (e) => {
+  e.notification.close();
+  const view = (e.notification.data && e.notification.data.view) || 'dashboard';
+  e.waitUntil((async () => {
+    const all = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+    const existing = all.find((c) => c.url.includes('index.html') || c.url.endsWith('/'));
+    if (existing) {
+      try { await existing.focus(); } catch {}
+      try { existing.postMessage({ type: 'navigate', view }); } catch {}
+    } else {
+      await self.clients.openWindow(`./index.html?notif=${encodeURIComponent(view)}`);
+    }
+  })());
 });
 
 self.addEventListener('fetch', (e) => {

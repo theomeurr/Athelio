@@ -1064,3 +1064,56 @@ body.locked { overflow: hidden; }
   white-space: pre-wrap;
   line-height: 1.45;
 }
+
+/* Notifications — bannière in-app */
+.notif-banner {
+  position: fixed;
+  left: 50%;
+  top: calc(16px + env(safe-area-inset-top));
+  transform: translateX(-50%);
+  background: var(--panel);
+  border: 1px solid var(--accent);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  font-size: 13px;
+  box-shadow: var(--shadow);
+  z-index: 180;
+  max-width: calc(100vw - 32px);
+  min-width: 280px;
+  animation: notif-pop 0.25s ease;
+}
+.notif-banner-body { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.notif-banner-body strong { font-size: 13px; }
+.notif-banner-text { color: var(--text-dim); font-size: 12px; }
+.notif-banner-actions { display: flex; gap: 6px; align-items: center; flex-shrink: 0; }
+@keyframes notif-pop {
+  from { transform: translate(-50%, -10px); opacity: 0; }
+  to   { transform: translate(-50%, 0);     opacity: 1; }
+}
+@media (max-width: 720px) {
+  .notif-banner { flex-wrap: wrap; min-width: 0; width: calc(100vw - 32px); }
+}
+
+/* Notifications — bouton switch on/off */
+.notif-switch {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  padding: 6px 14px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  min-width: 88px;
+  transition: all 0.15s ease;
+}
+.notif-switch:hover { border-color: var(--text-dim); }
+.notif-switch.on {
+  background: linear-gradient(135deg, #2ecc71, #27ae60);
+  border-color: transparent;
+  color: #0a1a0e;
+}
