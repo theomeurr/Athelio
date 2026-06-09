@@ -2110,37 +2110,34 @@ function openRecoveryForm() {
 views.mobility = () => {
   const wrap = el('div');
   wrap.appendChild(viewHeader('Mobilité', 'Travaille ta souplesse et ton amplitude pour rester en forme et prévenir les blessures.',
-    el('button', { class: 'btn', onClick: () => openMobilityForm() }, '+ Nouvelle séance'),
+    el('button', { class: 'btn', onClick: () => openMobilityForm() }, '+ Nouvel exercice'),
     el('button', { class: 'btn secondary', onClick: () => openVideoForm({ stateKey: 'mobilityVideos', navView: 'mobility' }) }, '+ Ajouter une vidéo'),
   ));
 
-  const arr = [...state.mobility].sort((a, b) => a.date.localeCompare(b.date));
-  const last = arr.at(-1);
-  const totalMin = arr.reduce((s, m) => s + (m.duration || 0), 0);
+  const arr = [...state.mobility].sort((a, b) => b.date.localeCompare(a.date));
 
-  if (arr.length) {
-    const kpis = el('div', { class: 'grid cols-3' });
-    kpis.appendChild(kpiCard('🧘 Séances', String(arr.length), 'au total'));
-    kpis.appendChild(kpiCard('⏱️ Temps cumulé', `${totalMin} min`, ''));
-    kpis.appendChild(kpiCard('📅 Dernière', last ? fmtDate(last.date) : '—', last ? `${last.duration} min` : ''));
-    wrap.appendChild(kpis);
-    wrap.appendChild(el('div', { style: 'height: 16px;' }));
-  }
-
-  const list = el('div', { class: 'card' }, el('h3', {}, 'Journal des séances'));
+  const list = el('div', { class: 'card' }, el('h3', {}, 'Exercices'));
   if (!arr.length) {
-    list.appendChild(emptyState('Aucune séance', 'Note ta première séance de mobilité (étirements, foam roller, yoga…).'));
+    list.appendChild(emptyState('Aucun exercice', 'Ajoute ton premier exercice de mobilité (étirements, foam roller, yoga…).'));
   } else {
-    [...arr].reverse().forEach(m => list.appendChild(el('div', { class: 'list-item' },
-      el('div', {},
-        el('div', { class: 'title' }, `${fmtDate(m.date)} · ${m.duration} min`),
-        el('div', { class: 'meta' },
-          `${m.focus || 'Mobilité générale'}${m.notes ? ' · ' + m.notes : ''}`),
-      ),
-      el('button', { class: 'icon-btn danger', onClick: () => {
-        state.mobility = state.mobility.filter(x => x.id !== m.id); save(); navigate('mobility');
-      } }, '✕'),
-    )));
+    arr.forEach(m => {
+      // Compat : anciennes entrées avaient { focus, notes, duration } — on les recompose.
+      const title = m.title || m.focus || 'Mobilité';
+      const description = m.description || m.notes || '';
+      list.appendChild(el('div', { class: 'list-item' },
+        el('div', { style: 'min-width: 0;' },
+          el('div', { class: 'title' }, title),
+          el('div', { class: 'meta' }, fmtDate(m.date)),
+          description ? el('div', { class: 'video-notes', style: 'margin-top: 6px;' }, description) : null,
+        ),
+        el('div', { class: 'actions' },
+          el('button', { class: 'icon-btn', onClick: () => openMobilityForm(m) }, '✎'),
+          el('button', { class: 'icon-btn danger', onClick: () => confirmAction('Supprimer cet exercice ?', () => {
+            state.mobility = state.mobility.filter(x => x.id !== m.id); save(); navigate('mobility');
+          }) }, '✕'),
+        ),
+      ));
+    });
   }
   wrap.appendChild(list);
 
@@ -2159,26 +2156,30 @@ views.mobility = () => {
   return wrap;
 };
 
-function openMobilityForm() {
-  openModal('Nouvelle séance de mobilité', (close) => {
+function openMobilityForm(existing) {
+  const m = existing || { date: today(), title: '', description: '' };
+  // Compat avec les anciennes entrées { focus, notes }
+  const initialTitle = m.title || m.focus || '';
+  const initialDesc = m.description || m.notes || '';
+
+  openModal(existing ? 'Modifier l\'exercice' : 'Nouvel exercice de mobilité', (close) => {
     const form = el('form', { class: 'form', onSubmit: (e) => {
       e.preventDefault();
       const d = Object.fromEntries(new FormData(e.target));
-      state.mobility.push({
-        id: id(), date: d.date,
-        duration: +d.duration,
-        focus: (d.focus || '').trim(),
-        notes: (d.notes || '').trim(),
-      });
-      save(); close(); navigate('mobility'); toast('Séance ajoutée');
+      const entry = {
+        id: existing?.id || id(),
+        date: d.date,
+        title: (d.title || '').trim(),
+        description: (d.description || '').trim(),
+      };
+      if (existing) state.mobility = state.mobility.map(x => x.id === entry.id ? entry : x);
+      else state.mobility.push(entry);
+      save(); close(); navigate('mobility'); toast(existing ? 'Exercice mis à jour' : 'Exercice ajouté');
     } });
     form.innerHTML = `
-      <div class="form-row">
-        <div><label>Date</label><input type="date" name="date" value="${today()}" required></div>
-        <div><label>Durée (min)</label><input type="number" min="1" name="duration" value="15" required></div>
-      </div>
-      <div><label>Zones travaillées</label><input type="text" name="focus" placeholder="Hanches, épaules, ischios…"></div>
-      <div><label>Notes</label><textarea name="notes" placeholder="Ressenti, progression, exercices…"></textarea></div>
+      <div><label>Titre</label><input type="text" name="title" value="${initialTitle.replace(/"/g, '&quot;')}" placeholder="Ex : Étirement ischios, ouverture de hanches…" required></div>
+      <div><label>Date</label><input type="date" name="date" value="${m.date || today()}" required></div>
+      <div><label>Description</label><textarea name="description" placeholder="Comment exécuter l'exercice, ressenti, axes…">${initialDesc}</textarea></div>
       <div class="form-actions">
         <button type="button" class="btn secondary">Annuler</button>
         <button type="submit" class="btn">Enregistrer</button>
