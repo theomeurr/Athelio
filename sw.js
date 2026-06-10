@@ -1,11 +1,13 @@
 // Athelio — service worker (offline-first)
-const CACHE = 'athelio-v12';
+const CACHE = 'athelio-v16';
 const ASSETS = [
   './',
   './index.html',
   './styles.css',
   './app.js',
   './manifest.webmanifest',
+  './logo.svg',
+  './logo-icon.svg',
   './icon-192.png',
   './icon-512.png',
   './apple-touch-icon.png',

@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" role="img" aria-label="Athelio">
+  <!-- Deux chevrons concentriques formant le A -->
+  <g fill="none" stroke="#fcefdd" stroke-width="13" stroke-linecap="square" stroke-linejoin="miter">
+    <path d="M 28 180 L 100 26 L 172 180" />
+    <path d="M 68 180 L 100 72 L 132 180" />
+  </g>
+  <!-- Ruban diagonal pêche, par-dessus le A -->
+  <path fill="#f6c9a0" d="M 16 184
+    C 64 178 108 148 158 102
+    C 174 86 186 72 196 58
+    C 188 92 162 128 118 156
+    C 82 178 50 196 24 202 Z" />
+</svg>

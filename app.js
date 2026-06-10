@@ -18,6 +18,7 @@ const defaultState = {
   mobilityVideos: [],
   sobriety: [],
   comparisons: [],
+  settings: { liftWeeklyTarget: 3 },
 };
 
 let state = load();
@@ -52,6 +53,7 @@ function migrate(parsed) {
   }
   if (!Array.isArray(s.badminton.matches)) s.badminton.matches = [];
   if (!Array.isArray(s.badminton.tournaments)) s.badminton.tournaments = [];
+  s.settings = { ...defaultState.settings, ...(parsed.settings || {}) };
   // Migration : matchs en 1 score → tableau de sets
   s.badminton.matches = s.badminton.matches.map(m => {
     if (Array.isArray(m.sets) && m.sets.length) return m;
@@ -1212,6 +1214,104 @@ function isoWeekStart(dateStr) {
   return d.toISOString().slice(0, 10);
 }
 
+// Groupes pertinents pour l'alerte de négligence (on saute cardio/fullbody : trop génériques)
+const TRACKED_GROUPS_FOR_ALERT = ['chest', 'back', 'shoulders', 'arms', 'legs', 'glutes', 'core'];
+
+function neglectedGroups(allLifts, thresholdDays) {
+  const todayMs = Date.now();
+  const lastByGroup = {};
+  allLifts.forEach(l => {
+    const t = new Date(l.date).getTime();
+    (l.groups || []).forEach(g => {
+      if (l.groups.includes('fullbody')) {
+        // une séance full-body compte pour tous les groupes principaux
+        TRACKED_GROUPS_FOR_ALERT.forEach(k => { if (!lastByGroup[k] || t > lastByGroup[k]) lastByGroup[k] = t; });
+      } else if (!lastByGroup[g] || t > lastByGroup[g]) {
+        lastByGroup[g] = t;
+      }
+    });
+  });
+  // Sur les groupes suivis : on alerte ceux jamais travaillés OU pas travaillés depuis ≥ threshold j
+  // (mais on n'alerte pas sur un groupe jamais touché si l'utilisateur n'a quasi pas de séances :
+  //  inutile de râler dès la première semaine — d'où la condition sur le total de séances)
+  const haveEnoughHistory = allLifts.length >= 4;
+  const items = [];
+  TRACKED_GROUPS_FOR_ALERT.forEach(g => {
+    const last = lastByGroup[g];
+    if (!last) {
+      if (haveEnoughHistory) items.push({ key: g, days: null });
+      return;
+    }
+    const days = Math.floor((todayMs - last) / 86400000);
+    if (days >= thresholdDays) items.push({ key: g, days });
+  });
+  // Trie : jamais d'abord, puis du plus négligé au moins négligé
+  items.sort((a, b) => (b.days ?? 1e9) - (a.days ?? 1e9));
+  return items;
+}
+
+function neglectedGroupsCard(items) {
+  const card = el('div', { class: 'card' });
+  card.appendChild(el('h3', {}, '⚠️ Groupes à reprendre'));
+  card.appendChild(el('p', { style: 'color: var(--text-dim); font-size: 13px; margin: 0 0 12px;' },
+    items.length > 1 ? 'Ces groupes n\'ont pas été travaillés récemment.' : 'Ce groupe n\'a pas été travaillé récemment.'));
+  const pills = el('div', { class: 'group-pills' });
+  items.forEach(({ key, days }) => {
+    const txt = days == null ? 'jamais' : `${days} j`;
+    pills.appendChild(el('div', { class: 'group-pill neglected' },
+      el('span', { class: 'group-pill-label' }, muscleLabel(key)),
+      el('span', { class: 'group-pill-count' }, txt),
+    ));
+  });
+  card.appendChild(pills);
+  return card;
+}
+
+function weeklyTargetCard(done, target) {
+  const pct = Math.min(100, Math.round((done / target) * 100));
+  const reached = done >= target;
+  const card = el('div', { class: 'card' });
+  card.appendChild(el('div', { style: 'display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex-wrap: wrap;' },
+    el('h3', { style: 'margin: 0;' }, '🎯 Objectif hebdo'),
+    el('div', { style: 'font-size: 12px; color: var(--text-dim); display: flex; gap: 8px; align-items: center;' },
+      el('span', {}, `${done} / ${target} séances`),
+      el('button', { class: 'icon-btn', title: 'Modifier l\'objectif', onClick: () => openLiftTargetForm() }, '✎'),
+    ),
+  ));
+  const bar = el('div', { class: 'progress', style: 'margin-top: 12px; height: 10px;' });
+  const fill = el('div', { class: `progress-fill${reached ? ' full' : ''}`, style: `width: ${pct}%;` });
+  bar.appendChild(fill);
+  card.appendChild(bar);
+  card.appendChild(el('p', { style: `margin: 8px 0 0; font-size: 12px; color: ${reached ? 'var(--success)' : 'var(--text-dim)'};` },
+    reached ? `✅ Objectif atteint — ${done - target > 0 ? `+${done - target} bonus` : 'pile sur le rythme'}.`
+            : `Encore ${target - done} séance${target - done > 1 ? 's' : ''} d'ici dimanche.`));
+  return card;
+}
+
+function openLiftTargetForm() {
+  openModal('Objectif hebdo', (close) => {
+    const cur = +(state.settings?.liftWeeklyTarget) || 3;
+    const form = el('form', { class: 'form', onSubmit: (e) => {
+      e.preventDefault();
+      const d = Object.fromEntries(new FormData(e.target));
+      const n = Math.max(1, Math.min(14, +d.target || 3));
+      state.settings = { ...(state.settings || {}), liftWeeklyTarget: n };
+      save(); close(); navigate('lifts'); toast(`Objectif : ${n} séance${n > 1 ? 's' : ''}/sem`);
+    } });
+    form.innerHTML = `
+      <div><label>Nombre de séances par semaine</label>
+        <input type="number" name="target" min="1" max="14" step="1" value="${cur}" required></div>
+      <p class="form-hint">La semaine commence le lundi.</p>
+      <div class="form-actions">
+        <button type="button" class="btn secondary">Annuler</button>
+        <button type="submit" class="btn">Enregistrer</button>
+      </div>
+    `;
+    form.querySelector('button[type=button]').onclick = close;
+    return form;
+  });
+}
+
 views.lifts = () => {
   const wrap = el('div');
   wrap.appendChild(viewHeader('Musculation', 'Quel jour, quel groupe — pour te souvenir. Les détails de séries sont dans Hevy.',
@@ -1230,15 +1330,27 @@ views.lifts = () => {
   const lastWeek = all.filter(l => l.date >= lastWeekStart && l.date < thisWeekStart);
   const delta = thisWeek.length - lastWeek.length;
 
+  const target = Math.max(1, +(state.settings?.liftWeeklyTarget) || 3);
   const kpis = el('div', { class: 'grid cols-3' });
   kpis.appendChild(kpiCard('🗓️ Cette semaine', String(thisWeek.length), thisWeek.length > 1 ? 'séances' : 'séance',
-    thisWeek.length >= 3 ? 'success' : (thisWeek.length ? 'accent' : 'danger')));
+    thisWeek.length >= target ? 'success' : (thisWeek.length ? 'accent' : 'danger')));
   kpis.appendChild(kpiCard('⏪ Semaine dernière', String(lastWeek.length),
     delta === 0 ? '= même rythme' : (delta > 0 ? `+${delta} cette semaine` : `${delta} cette semaine`),
     delta >= 0 ? 'success' : 'danger'));
   kpis.appendChild(kpiCard('📊 Total séances', String(all.length), all.length ? `depuis ${fmtDate(all.at(-1).date)}` : ''));
   wrap.appendChild(kpis);
   wrap.appendChild(el('div', { style: 'height: 16px;' }));
+
+  // Objectif hebdo : jauge de progression
+  wrap.appendChild(weeklyTargetCard(thisWeek.length, target));
+  wrap.appendChild(el('div', { style: 'height: 16px;' }));
+
+  // Alerte : groupes négligés (pas travaillés depuis ≥ 10 jours)
+  const neglected = neglectedGroups(all, 10);
+  if (neglected.length) {
+    wrap.appendChild(neglectedGroupsCard(neglected));
+    wrap.appendChild(el('div', { style: 'height: 16px;' }));
+  }
 
   // Graphique : séances par semaine (8 dernières)
   const chartCard = el('div', { class: 'card' }, el('h3', {}, 'Fréquence par semaine'),
@@ -1585,36 +1697,115 @@ views.photos = () => {
 };
 
 function comparisonCard(c) {
-  return el('div', { class: 'card compare-card' },
-    el('div', { class: 'compare-head' },
-      el('div', {},
-        el('div', { class: 'compare-title' }, c.title || `Comparaison du ${fmtDate(c.date)}`),
-        el('div', { class: 'compare-date' }, fmtDate(c.date)),
-      ),
-      el('div', { class: 'actions' },
-        el('button', { class: 'icon-btn', onClick: () => openComparisonForm(c) }, '✎'),
-        el('button', { class: 'icon-btn danger', onClick: () => confirmAction('Supprimer cette comparaison ?', () => {
-          state.comparisons = state.comparisons.filter(x => x.id !== c.id);
-          save(); navigate('photos'); toast('Comparaison supprimée');
-        }) }, '✕'),
-      ),
+  const card = el('div', { class: 'card compare-card' });
+  let mode = 'side'; // 'side' = côte à côte, 'slider' = avant/après slider
+
+  const head = el('div', { class: 'compare-head' },
+    el('div', {},
+      el('div', { class: 'compare-title' }, c.title || `Comparaison du ${fmtDate(c.date)}`),
+      el('div', { class: 'compare-date' }, fmtDate(c.date)),
     ),
-    el('div', { class: 'compare-canvas' },
-      el('div', { class: 'compare-side' },
+    el('div', { class: 'actions', style: 'display: flex; gap: 6px; align-items: center;' },
+      el('div', { class: 'compare-mode-switch', role: 'tablist' },
+        el('button', { class: 'mode-btn active', 'data-mode': 'side', title: 'Côte à côte' }, '⫶⫶'),
+        el('button', { class: 'mode-btn', 'data-mode': 'slider', title: 'Slider avant/après' }, '◐'),
+      ),
+      el('button', { class: 'icon-btn', onClick: () => openComparisonForm(c) }, '✎'),
+      el('button', { class: 'icon-btn danger', onClick: () => confirmAction('Supprimer cette comparaison ?', () => {
+        state.comparisons = state.comparisons.filter(x => x.id !== c.id);
+        save(); navigate('photos'); toast('Comparaison supprimée');
+      }) }, '✕'),
+    ),
+  );
+
+  const canvas = el('div', { class: 'compare-canvas' });
+  const renderCanvas = () => {
+    canvas.innerHTML = '';
+    if (mode === 'side') {
+      canvas.classList.remove('slider-mode');
+      canvas.appendChild(el('div', { class: 'compare-side' },
         el('div', { class: 'compare-label' }, c.beforeLabel || 'Avant'),
         el('div', { class: 'compare-img-wrap' },
           el('img', { src: c.beforeData, alt: 'avant', loading: 'lazy', onClick: () => openImageZoom(c.beforeData) }),
         ),
-      ),
-      el('div', { class: 'compare-side' },
+      ));
+      canvas.appendChild(el('div', { class: 'compare-side' },
         el('div', { class: 'compare-label after' }, c.afterLabel || 'Après'),
         el('div', { class: 'compare-img-wrap' },
           el('img', { src: c.afterData, alt: 'après', loading: 'lazy', onClick: () => openImageZoom(c.afterData) }),
         ),
-      ),
-    ),
-    c.notes ? el('div', { class: 'compare-notes' }, c.notes) : null,
-  );
+      ));
+    } else {
+      canvas.classList.add('slider-mode');
+      canvas.appendChild(buildSlider(c));
+    }
+  };
+
+  head.querySelectorAll('.mode-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      mode = btn.dataset.mode;
+      head.querySelectorAll('.mode-btn').forEach(b => b.classList.toggle('active', b === btn));
+      renderCanvas();
+    });
+  });
+
+  card.appendChild(head);
+  card.appendChild(canvas);
+  if (c.notes) card.appendChild(el('div', { class: 'compare-notes' }, c.notes));
+  renderCanvas();
+  return card;
+}
+
+// Slider interactif "before/after" : la photo "après" est révélée par une barre verticale
+// que l'on glisse. Les deux images sont superposées en taille réelle ; on coupe l'après
+// avec clip-path → alignement pixel-perfect garanti.
+function buildSlider(c) {
+  const wrap = el('div', { class: 'slider-wrap' });
+  const beforeImg = el('img', { src: c.beforeData, alt: 'avant', class: 'slider-img slider-before', draggable: 'false' });
+  const afterImg = el('img', { src: c.afterData, alt: 'après', class: 'slider-img slider-after', draggable: 'false' });
+  const handle = el('div', { class: 'slider-handle' }, el('div', { class: 'slider-handle-knob' }, '⇆'));
+  const beforeTag = el('div', { class: 'slider-tag slider-tag-before' }, c.beforeLabel || 'Avant');
+  const afterTag = el('div', { class: 'slider-tag slider-tag-after' }, c.afterLabel || 'Après');
+
+  wrap.appendChild(beforeImg);
+  wrap.appendChild(afterImg);
+  wrap.appendChild(handle);
+  wrap.appendChild(beforeTag);
+  wrap.appendChild(afterTag);
+
+  const setPct = (v) => {
+    const p = Math.max(0, Math.min(100, v));
+    afterImg.style.clipPath = `inset(0 0 0 ${p}%)`;
+    handle.style.left = p + '%';
+  };
+  setPct(50);
+
+  let dragging = false;
+  const moveTo = (clientX) => {
+    const rect = wrap.getBoundingClientRect();
+    setPct(((clientX - rect.left) / rect.width) * 100);
+  };
+  const onDown = (e) => {
+    dragging = true;
+    wrap.classList.add('dragging');
+    moveTo(e.touches ? e.touches[0].clientX : e.clientX);
+    e.preventDefault();
+  };
+  const onMove = (e) => {
+    if (!dragging) return;
+    moveTo(e.touches ? e.touches[0].clientX : e.clientX);
+  };
+  const onUp = () => { dragging = false; wrap.classList.remove('dragging'); };
+
+  wrap.addEventListener('mousedown', onDown);
+  wrap.addEventListener('touchstart', onDown, { passive: false });
+  window.addEventListener('mousemove', onMove);
+  window.addEventListener('touchmove', onMove, { passive: false });
+  window.addEventListener('mouseup', onUp);
+  window.addEventListener('touchend', onUp);
+  window.addEventListener('touchcancel', onUp);
+
+  return wrap;
 }
 
 function openImageZoom(src) {
@@ -1752,10 +1943,45 @@ function parseVideo(url) {
   return { type: 'link', src: url };
 }
 
+// Génère une miniature JPEG (dataURL) à partir d'un fichier vidéo local.
+// Capture une frame vers 1 s (ou mi-durée si plus court), redimensionnée à 480px.
+function makeVideoThumb(file, { width = 480 } = {}) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const url = URL.createObjectURL(file);
+    const video = document.createElement('video');
+    const done = (thumb) => {
+      if (settled) return;
+      settled = true;
+      URL.revokeObjectURL(url);
+      resolve(thumb);
+    };
+    video.muted = true;
+    video.playsInline = true;
+    video.preload = 'metadata';
+    video.onerror = () => done(null);
+    video.onloadedmetadata = () => {
+      video.currentTime = Math.min(1, (video.duration || 2) / 2);
+    };
+    video.onseeked = () => {
+      try {
+        const ratio = video.videoHeight && video.videoWidth ? video.videoHeight / video.videoWidth : 9 / 16;
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = Math.round(width * ratio);
+        canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
+        done(canvas.toDataURL('image/jpeg', 0.72));
+      } catch { done(null); }
+    };
+    video.src = url;
+    setTimeout(() => done(null), 8000); // garde-fou (codec non supporté, fichier corrompu…)
+  });
+}
+
 function videoEmbed(v) {
   // Vidéo fichier dans IndexedDB : on insère un placeholder puis on injecte la vraie src
   if (v.blobKey) {
-    const video = el('video', { controls: '', preload: 'metadata' });
+    const video = el('video', { controls: '', preload: 'metadata', poster: v.thumb || null });
     getVideoBlobUrl(v.blobKey).then((url) => {
       if (url) video.src = url;
       else video.replaceWith(el('div', { class: 'video-fallback' }, 'Vidéo introuvable (cache vidé ?)'));
@@ -1777,15 +2003,45 @@ function videoEmbed(v) {
   return el('div', { class: 'video-fallback' }, 'Vidéo indisponible');
 }
 
+let videoTagFilter = null;
+
 views.videos = () => {
   const wrap = el('div');
   wrap.appendChild(viewHeader('Vidéos', 'Garde tes vidéos datées pour visionner ta progression dans le temps.',
     el('button', { class: 'btn', onClick: () => openVideoForm() }, '+ Ajouter une vidéo')));
 
+  const all = [...state.videos].sort((a, b) => b.date.localeCompare(a.date));
+
+  // Filtres par tag
+  const tagCounts = {};
+  all.forEach(v => (v.tags || []).forEach(t => { tagCounts[t] = (tagCounts[t] || 0) + 1; }));
+  const tags = Object.keys(tagCounts).sort((a, b) => tagCounts[b] - tagCounts[a]);
+  if (videoTagFilter && !tagCounts[videoTagFilter]) videoTagFilter = null;
+
+  if (tags.length) {
+    const filterBar = el('div', { class: 'tag-filter' });
+    filterBar.appendChild(el('button', {
+      class: `tag-chip ${videoTagFilter == null ? 'active' : ''}`,
+      onClick: () => { videoTagFilter = null; navigate('videos'); },
+    }, `Tout · ${all.length}`));
+    tags.forEach(t => {
+      filterBar.appendChild(el('button', {
+        class: `tag-chip ${videoTagFilter === t ? 'active' : ''}`,
+        onClick: () => { videoTagFilter = t; navigate('videos'); },
+      }, `${t} · ${tagCounts[t]}`));
+    });
+    wrap.appendChild(filterBar);
+  }
+
+  const arr = videoTagFilter ? all.filter(v => (v.tags || []).includes(videoTagFilter)) : all;
+
   const card = el('div', { class: 'card' });
-  const arr = [...state.videos].sort((a, b) => b.date.localeCompare(a.date));
   if (!arr.length) {
-    card.appendChild(emptyState('Aucune vidéo', 'Ajoute un lien (YouTube, Vimeo, Drive…) ou un fichier court pour suivre ta progression.'));
+    if (!all.length) {
+      card.appendChild(emptyState('Aucune vidéo', 'Ajoute un lien (YouTube, Vimeo, Drive…) ou un fichier court pour suivre ta progression.'));
+    } else {
+      card.appendChild(emptyState('Aucune vidéo pour ce tag', 'Essaie un autre filtre ou ajoute un tag à tes vidéos existantes.'));
+    }
   } else {
     const grid = el('div', { class: 'video-grid' });
     arr.forEach(v => grid.appendChild(videoCard(v)));
@@ -1806,11 +2062,17 @@ function videoCard(v, opts = {}) {
           el('div', { class: 'video-date' }, fmtDate(v.date)),
           v.title ? el('div', { class: 'video-title' }, v.title) : null,
         ),
-        el('button', { class: 'icon-btn danger', onClick: async () => {
-          if (v.blobKey) { try { await idbDel(STORE_BLOBS, v.blobKey); } catch {} }
-          state[stateKey] = state[stateKey].filter(x => x.id !== v.id); save(); navigate(navView); toast('Vidéo supprimée');
-        } }, '✕'),
+        el('div', { class: 'actions' },
+          el('button', { class: 'icon-btn', title: 'Modifier', onClick: () => openVideoForm({ ...opts, existing: v }) }, '✎'),
+          el('button', { class: 'icon-btn danger', onClick: async () => {
+            if (v.blobKey) { try { await idbDel(STORE_BLOBS, v.blobKey); } catch {} }
+            state[stateKey] = state[stateKey].filter(x => x.id !== v.id); save(); navigate(navView); toast('Vidéo supprimée');
+          } }, '✕'),
+        ),
       ),
+      (v.tags && v.tags.length) ? el('div', { class: 'video-tags' },
+        ...v.tags.map(t => el('span', { class: 'video-tag' }, t))
+      ) : null,
       v.notes ? el('div', { class: 'video-notes' }, v.notes) : null,
     ),
   );
@@ -1819,14 +2081,31 @@ function videoCard(v, opts = {}) {
 function openVideoForm(opts = {}) {
   const stateKey = opts.stateKey || 'videos';
   const navView = opts.navView || 'videos';
-  openModal('Ajouter une vidéo', (close) => {
+  const existing = opts.existing || null;
+  // Suggestions de tags = ceux déjà utilisés dans la même catégorie
+  const suggested = Array.from(new Set((state[stateKey] || []).flatMap(v => v.tags || []))).sort();
+
+  openModal(existing ? 'Modifier la vidéo' : 'Ajouter une vidéo', (close) => {
     let pendingFile = null;
+    let pendingThumb = null;
+    let currentTags = new Set(existing?.tags || []);
+
     const form = el('form', { class: 'form', onSubmit: async (e) => {
       e.preventDefault();
       const d = Object.fromEntries(new FormData(e.target));
       const url = (d.url || '').trim();
-      if (!url && !pendingFile) { toast('Ajoute un lien ou un fichier vidéo.'); return; }
-      const entry = { id: id(), date: d.date, title: (d.title || '').trim(), url, notes: (d.notes || '').trim() };
+      if (!existing && !url && !pendingFile) { toast('Ajoute un lien ou un fichier vidéo.'); return; }
+      const tags = Array.from(currentTags);
+      if (existing) {
+        const updated = { ...existing,
+          date: d.date, title: (d.title || '').trim(),
+          url: url || existing.url || '',
+          notes: (d.notes || '').trim(), tags };
+        state[stateKey] = state[stateKey].map(x => x.id === existing.id ? updated : x);
+        if (!save()) return;
+        close(); navigate(navView); toast('Vidéo mise à jour'); return;
+      }
+      const entry = { id: id(), date: d.date, title: (d.title || '').trim(), url, notes: (d.notes || '').trim(), tags };
       if (pendingFile) {
         const key = 'video-' + entry.id;
         try {
@@ -1834,6 +2113,7 @@ function openVideoForm(opts = {}) {
           entry.blobKey = key;
           entry.size = pendingFile.size;
           entry.mime = pendingFile.type;
+          if (pendingThumb) entry.thumb = pendingThumb;
         } catch (err) {
           toast('Stockage refusé par le navigateur : ' + (err?.message || err));
           return;
@@ -1847,24 +2127,78 @@ function openVideoForm(opts = {}) {
       }
       close(); navigate(navView); toast('Vidéo ajoutée');
     } });
+    const dateVal = existing?.date || today();
+    const titleVal = existing?.title || '';
+    const urlVal = existing?.url || '';
+    const notesVal = existing?.notes || '';
     form.innerHTML = `
       <div class="form-row">
-        <div><label>Date</label><input type="date" name="date" value="${today()}" required></div>
-        <div><label>Titre</label><input type="text" name="title" placeholder="ex : Service revers, semaine 3"></div>
+        <div><label>Date</label><input type="date" name="date" value="${dateVal}" required></div>
+        <div><label>Titre</label><input type="text" name="title" value="${titleVal.replace(/"/g, '&quot;')}" placeholder="ex : Service revers, semaine 3"></div>
       </div>
-      <div><label>Lien vidéo</label><input type="url" name="url" placeholder="https://youtube.com/… ou Vimeo, Drive…"></div>
-      <div><label>… ou importer un fichier vidéo</label><input type="file" accept="video/*" name="file"></div>
-      <p class="form-hint file-hint">Stockage local jusqu'à ~500 Mo par fichier. Au-delà, préfère un lien (YouTube, Vimeo, Drive).</p>
-      <div><label>Notes</label><textarea name="notes" placeholder="Ce que tu observes, axes de travail…"></textarea></div>
+      ${existing ? '' : `
+        <div><label>Lien vidéo</label><input type="url" name="url" value="${urlVal.replace(/"/g, '&quot;')}" placeholder="https://youtube.com/… ou Vimeo, Drive…"></div>
+        <div><label>… ou importer un fichier vidéo</label><input type="file" accept="video/*" name="file"></div>
+        <p class="form-hint file-hint">Stockage local jusqu'à ~500 Mo par fichier. Au-delà, préfère un lien (YouTube, Vimeo, Drive).</p>
+        <img class="video-thumb-preview" alt="Aperçu de la vidéo" hidden>
+      `}
+      <div>
+        <label>Tags <span style="color: var(--text-dim); font-weight: 400;">(ex : service, smash, footwork)</span></label>
+        <div class="tag-input-wrap">
+          <div class="tag-chips" data-role="chips"></div>
+          <input type="text" class="tag-input" placeholder="Ajouter un tag puis Entrée…">
+        </div>
+        ${suggested.length ? `<div class="tag-suggest"><span class="tag-suggest-label">Récents :</span><div class="tag-suggest-list" data-role="suggest"></div></div>` : ''}
+      </div>
+      <div><label>Notes</label><textarea name="notes" placeholder="Ce que tu observes, axes de travail…">${notesVal.replace(/</g, '&lt;')}</textarea></div>
       <div class="form-actions">
         <button type="button" class="btn secondary">Annuler</button>
         <button type="submit" class="btn">Enregistrer</button>
       </div>
     `;
+
+    const chipsBox = form.querySelector('[data-role="chips"]');
+    const tagInput = form.querySelector('.tag-input');
+    const suggestBox = form.querySelector('[data-role="suggest"]');
+    const renderChips = () => {
+      chipsBox.innerHTML = '';
+      currentTags.forEach(t => {
+        const chip = el('span', { class: 'tag-chip-removable' }, t,
+          el('button', { type: 'button', class: 'tag-remove', onClick: () => { currentTags.delete(t); renderChips(); renderSuggest(); } }, '×'));
+        chipsBox.appendChild(chip);
+      });
+    };
+    const addTag = (raw) => {
+      const t = (raw || '').trim().toLowerCase();
+      if (!t) return;
+      currentTags.add(t);
+      tagInput.value = '';
+      renderChips(); renderSuggest();
+    };
+    const renderSuggest = () => {
+      if (!suggestBox) return;
+      suggestBox.innerHTML = '';
+      suggested.filter(t => !currentTags.has(t)).forEach(t => {
+        suggestBox.appendChild(el('button', { type: 'button', class: 'tag-chip-suggest', onClick: () => addTag(t) }, '+ ' + t));
+      });
+    };
+    tagInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ',') { e.preventDefault(); addTag(tagInput.value); }
+      else if (e.key === 'Backspace' && !tagInput.value && currentTags.size) {
+        const last = Array.from(currentTags).pop();
+        currentTags.delete(last); renderChips(); renderSuggest();
+      }
+    });
+    tagInput.addEventListener('blur', () => { if (tagInput.value.trim()) addTag(tagInput.value); });
+    renderChips(); renderSuggest();
     const fileInput = form.querySelector('input[type=file]');
     const hint = form.querySelector('.file-hint');
-    fileInput.addEventListener('change', (e) => {
+    const preview = form.querySelector('.video-thumb-preview');
+    if (fileInput) fileInput.addEventListener('change', (e) => {
       const f = e.target.files[0];
+      pendingThumb = null;
+      preview.hidden = true;
+      preview.removeAttribute('src');
       if (!f) { pendingFile = null; hint.textContent = 'Stockage local jusqu\'à ~500 Mo par fichier. Au-delà, préfère un lien.'; return; }
       if (f.size > 500_000_000) {
         toast('Fichier trop lourd (max 500 Mo). Préfère un lien.');
@@ -1872,6 +2206,12 @@ function openVideoForm(opts = {}) {
       }
       pendingFile = f;
       hint.textContent = `📦 ${f.name} — ${(f.size / 1_000_000).toFixed(1)} Mo, sera stocké dans IndexedDB (hors-ligne).`;
+      makeVideoThumb(f).then((thumb) => {
+        if (pendingFile !== f || !thumb) return; // fichier changé entre-temps ou capture impossible
+        pendingThumb = thumb;
+        preview.src = thumb;
+        preview.hidden = false;
+      });
     });
     form.querySelector('button[type=button]').onclick = close;
     return form;
@@ -2458,7 +2798,7 @@ function showLockScreen() {
     const root = $('#modal-root');
     const overlay = el('div', { class: 'lock-screen' },
       el('div', { class: 'lock-card' },
-        el('div', { class: 'lock-logo' }, 'A'),
+        el('div', { class: 'lock-logo', 'aria-label': 'Athelio' }),
         el('h2', { class: 'lock-title' }, 'Athelio'),
         el('p', { class: 'lock-sub' }, 'Entre ton code PIN'),
         el('input', { type: 'password', inputmode: 'numeric', autocomplete: 'off',
