@@ -3102,6 +3102,289 @@ function showBackupReminderIfNeeded() {
 }
 
 // =============================================================
+// Review du jour — passe chaque catégorie pour ne rien oublier.
+// Les catégories déjà renseignées aujourd'hui sont sautées ;
+// Vidéos et Objectifs sont exclus (pas de saisie quotidienne).
+// =============================================================
+
+function reviewSteps(ctx) {
+  const t = today();
+  const steps = [];
+
+  // 🥗 Sobriété
+  if (!state.sobriety.some(x => x.date === t)) steps.push({
+    emoji: '🥗', title: 'Sobriété', question: 'As-tu fait un écart aujourd\'hui ?',
+    noSave: true,
+    build() {
+      const what = el('input', { type: 'text', placeholder: 'Pizza, alcool, sucreries…' });
+      const why = el('textarea', { placeholder: 'Stress, sortie entre amis, fatigue…' });
+      const slipFields = el('div', { class: 'form', style: 'display: none; margin-top: 12px;' },
+        el('div', {}, el('label', {}, 'Quel écart ?'), what),
+        el('div', {}, el('label', {}, 'Pourquoi ?'), why),
+        el('button', { type: 'button', class: 'btn', onClick: () => {
+          if (!what.value.trim()) { toast('Indique quel écart, ou clique sur Passer.'); return; }
+          state.sobriety.push({ id: id(), date: t, hasSlip: true, what: what.value.trim(), why: why.value.trim() });
+          save(); ctx.next(true);
+        } }, 'Enregistrer l\'écart'),
+      );
+      const box = el('div', {},
+        el('div', { style: 'display: flex; gap: 8px;' },
+          el('button', { class: 'btn', style: 'flex:1; background: linear-gradient(135deg, #6fcf97, #4fb97f); color: #0a1828;',
+            onClick: () => {
+              state.sobriety.push({ id: id(), date: t, hasSlip: false, what: '', why: '' });
+              save(); ctx.next(true);
+            } }, '✅ Journée saine'),
+          el('button', { class: 'btn', style: 'flex:1; background: linear-gradient(135deg, #eb7a70, #d65c52); color: #0a1828;',
+            onClick: () => { slipFields.style.display = 'grid'; what.focus(); } }, '⚠️ Écart'),
+        ),
+        slipFields,
+      );
+      return { el: box };
+    },
+  });
+
+  // 🏸 Badminton — le formulaire complet s'ouvre à la fin de la review
+  if (!state.badminton.matches.some(m => m.date === t)) steps.push({
+    emoji: '🏸', title: 'Badminton', question: 'As-tu joué un match aujourd\'hui ?',
+    noSave: true,
+    build() {
+      return { el: el('button', { class: 'btn', style: 'width: 100%;', onClick: () => {
+        ctx.openMatchAtEnd = true;
+        ctx.next(true);
+      } }, '🏸 Oui — je saisirai le match à la fin de la review') };
+    },
+  });
+
+  // 🏃 Course
+  if (!state.runs.some(r => r.date === t)) steps.push({
+    emoji: '🏃', title: 'Course', question: 'As-tu couru aujourd\'hui ?',
+    build() {
+      const dist = el('input', { type: 'number', step: '0.1', min: '0', placeholder: 'ex : 5.2' });
+      const dur = el('input', { type: 'number', step: '0.1', min: '0', placeholder: 'ex : 31' });
+      const notes = el('textarea', { placeholder: 'Ressenti, parcours…' });
+      const box = el('div', { class: 'form' },
+        el('div', { class: 'form-row' },
+          el('div', {}, el('label', {}, 'Distance (km)'), dist),
+          el('div', {}, el('label', {}, 'Durée (min)'), dur),
+        ),
+        el('div', {}, el('label', {}, 'Notes (facultatif)'), notes),
+      );
+      return { el: box, save() {
+        const d = parseFloat(dist.value), du = parseFloat(dur.value);
+        if (!d || !du) { toast('Distance et durée requises — ou clique sur Passer.'); return false; }
+        state.runs.push({ id: id(), date: t, distance: d, duration: du, notes: notes.value.trim() });
+        save(); return true;
+      } };
+    },
+  });
+
+  // 🏋️ Musculation
+  if (!state.lifts.some(l => l.date === t)) steps.push({
+    emoji: '🏋️', title: 'Musculation', question: 'Séance aujourd\'hui ? Sélectionne les groupes travaillés.',
+    build() {
+      const selected = new Set();
+      const grid = el('div', { class: 'muscle-grid' });
+      MUSCLE_GROUPS.forEach(g => {
+        const btn = el('button', { type: 'button', class: 'muscle-btn', onClick: () => {
+          if (selected.has(g.key)) selected.delete(g.key); else selected.add(g.key);
+          btn.classList.toggle('active');
+        } }, el('span', { class: 'muscle-emoji' }, g.emoji), el('span', {}, g.label));
+        grid.appendChild(btn);
+      });
+      const focus = el('input', { type: 'text', placeholder: 'Ex : Force / Hypertrophie' });
+      const box = el('div', { class: 'form' },
+        grid,
+        el('div', { style: 'margin-top: 4px;' }, el('label', {}, 'Focus (facultatif)'), focus),
+      );
+      return { el: box, save() {
+        if (!selected.size) { toast('Sélectionne au moins un groupe — ou clique sur Passer.'); return false; }
+        state.lifts.push({ id: id(), date: t, groups: Array.from(selected), focus: focus.value.trim(), notes: '' });
+        save(); return true;
+      } };
+    },
+  });
+
+  // ⚖️ Poids
+  if (!state.weight.some(w => w.date === t)) steps.push({
+    emoji: '⚖️', title: 'Poids', question: 'Tu t\'es pesé aujourd\'hui ?',
+    build() {
+      const input = el('input', { type: 'number', step: '0.1', min: '20', placeholder: 'ex : 78.4' });
+      return {
+        el: el('div', { class: 'form' }, el('div', {}, el('label', {}, 'Poids (kg)'), input)),
+        save() {
+          const v = parseFloat(input.value);
+          if (!v) { toast('Entre ton poids — ou clique sur Passer.'); return false; }
+          state.weight.push({ id: id(), date: t, value: v });
+          save(); return true;
+        },
+      };
+    },
+  });
+
+  // 📏 Mensurations
+  if (!state.measurements.some(m => m.date === t)) steps.push({
+    emoji: '📏', title: 'Mensurations', question: 'Jour de mesures ? (1×/mois suffit)',
+    build() {
+      const mk = () => el('input', { type: 'number', step: '0.5', min: '0' });
+      const chest = mk(), arm = mk(), waist = mk(), thigh = mk();
+      const box = el('div', { class: 'form' },
+        el('div', { class: 'form-row' },
+          el('div', {}, el('label', {}, 'Poitrine (cm)'), chest),
+          el('div', {}, el('label', {}, 'Bras (cm)'), arm),
+        ),
+        el('div', { class: 'form-row' },
+          el('div', {}, el('label', {}, 'Taille (cm)'), waist),
+          el('div', {}, el('label', {}, 'Cuisse (cm)'), thigh),
+        ),
+      );
+      return { el: box, save() {
+        const vals = [chest, arm, waist, thigh].map(i => i.value ? +i.value : null);
+        if (vals.every(v => v == null)) { toast('Entre au moins une mesure — ou clique sur Passer.'); return false; }
+        state.measurements.push({ id: id(), date: t, chest: vals[0], arm: vals[1], waist: vals[2], thigh: vals[3] });
+        save(); return true;
+      } };
+    },
+  });
+
+  // 📷 Photo
+  if (!state.photos.some(p => p.date === t)) steps.push({
+    emoji: '📷', title: 'Photo', question: 'Une photo de progression aujourd\'hui ?',
+    build() {
+      let file = null;
+      const label = el('input', { type: 'text', placeholder: 'Légende (facultatif)' });
+      const fileBtn = el('label', { class: 'btn secondary', style: 'display: block; text-align: center; cursor: pointer;' },
+        '📷 Choisir une photo',
+        el('input', { type: 'file', accept: 'image/*', hidden: '', onChange: (e) => {
+          file = e.target.files[0] || null;
+          fileBtn.firstChild.textContent = file ? `📦 ${file.name}` : '📷 Choisir une photo';
+        } }),
+      );
+      const box = el('div', { class: 'form' }, fileBtn, el('div', {}, el('label', {}, 'Légende'), label));
+      return { el: box, async save() {
+        if (!file) { toast('Choisis une photo — ou clique sur Passer.'); return false; }
+        try {
+          const data = await compressImage(file);
+          state.photos.push({ id: id(), date: t, label: label.value.trim(), data });
+          if (!save()) { state.photos.pop(); return false; }
+          return true;
+        } catch { toast('Impossible de charger cette image.'); return false; }
+      } };
+    },
+  });
+
+  // 🧘 AntiFragile (mobilité)
+  if (!state.mobility.some(m => m.date === t)) steps.push({
+    emoji: '🧘', title: 'AntiFragile', question: 'Mobilité / étirements aujourd\'hui ?',
+    build() {
+      const title = el('input', { type: 'text', placeholder: 'Ex : Étirement ischios, ouverture de hanches…' });
+      const desc = el('textarea', { placeholder: 'Exécution, ressenti, axes…' });
+      const box = el('div', { class: 'form' },
+        el('div', {}, el('label', {}, 'Titre'), title),
+        el('div', {}, el('label', {}, 'Description (facultatif)'), desc),
+      );
+      return { el: box, save() {
+        if (!title.value.trim()) { toast('Donne un titre — ou clique sur Passer.'); return false; }
+        state.mobility.push({ id: id(), date: t, title: title.value.trim(), description: desc.value.trim() });
+        save(); return true;
+      } };
+    },
+  });
+
+  // 🌙 Récupération
+  if (!state.recovery.some(r => r.date === t)) steps.push({
+    emoji: '🌙', title: 'Récupération', question: 'Comment te sens-tu ce soir ?',
+    build() {
+      const mkScale = (current) => {
+        const scale = el('div', { class: 'scale' });
+        let value = current;
+        for (let i = 0; i <= 5; i++) {
+          const b = el('button', { type: 'button', class: `scale-btn${i === value ? ' active' : ''}`, onClick: () => {
+            value = i;
+            scale.querySelectorAll('.scale-btn').forEach((x, j) => x.classList.toggle('active', j === i));
+            scale.dataset.value = String(i);
+          } }, String(i));
+          scale.appendChild(b);
+        }
+        scale.dataset.value = String(value);
+        return scale;
+      };
+      const fatigue = mkScale(2);
+      const pain = mkScale(1);
+      const box = el('div', { class: 'form' },
+        el('div', {}, el('label', {}, 'Fatigue (/5)'), fatigue),
+        el('div', {}, el('label', {}, 'Douleurs (/5)'), pain),
+      );
+      return { el: box, save() {
+        state.recovery.push({ id: id(), date: t, fatigue: +fatigue.dataset.value, pain: +pain.dataset.value, notes: '' });
+        save(); return true;
+      } };
+    },
+  });
+
+  return steps;
+}
+
+function openDailyReview() {
+  const ctx = { openMatchAtEnd: false, next: null };
+  const steps = reviewSteps(ctx);
+  if (!steps.length) { toast('✅ Tout est déjà renseigné pour aujourd\'hui !'); return; }
+
+  let idx = 0, savedCount = 0, skippedCount = 0;
+
+  openModal('☀️ Review du jour', (close) => {
+    const body = el('div');
+
+    const render = () => {
+      body.innerHTML = '';
+
+      // Écran final
+      if (idx >= steps.length) {
+        body.appendChild(el('div', { style: 'text-align: center; padding: 8px 0;' },
+          el('div', { style: 'font-size: 44px;' }, savedCount ? '🎉' : '👌'),
+          el('p', { style: 'margin: 10px 0 4px; font-weight: 700; font-size: 16px;' }, 'Review terminée'),
+          el('p', { style: 'margin: 0 0 18px; color: var(--text-dim); font-size: 13px;' },
+            `${savedCount} saisie${savedCount > 1 ? 's' : ''} · ${skippedCount} passée${skippedCount > 1 ? 's' : ''}`),
+          el('button', { class: 'btn', style: 'width: 100%;', onClick: () => {
+            close();
+            navigate(currentView); // rafraîchit la vue pour refléter les saisies
+            if (ctx.openMatchAtEnd) openMatchForm();
+          } }, ctx.openMatchAtEnd ? '🏸 Saisir mon match' : 'Fermer'),
+        ));
+        return;
+      }
+
+      const step = steps[idx];
+      body.appendChild(el('div', { class: 'review-head' },
+        el('span', { class: 'review-count' }, `${idx + 1} / ${steps.length}`),
+        el('div', { class: 'progress', style: 'flex: 1; margin-top: 0;' },
+          el('div', { class: 'progress-fill', style: `width: ${Math.round((idx / steps.length) * 100)}%;` })),
+      ));
+      body.appendChild(el('h4', { class: 'review-title' }, `${step.emoji} ${step.title}`));
+      body.appendChild(el('p', { class: 'review-question' }, step.question));
+
+      const built = step.build();
+      body.appendChild(built.el);
+
+      body.appendChild(el('div', { class: 'form-actions', style: 'margin-top: 18px;' },
+        el('button', { class: 'btn secondary', onClick: () => ctx.next(false) }, 'Passer'),
+        step.noSave ? null : el('button', { class: 'btn', onClick: async () => {
+          if (await built.save()) ctx.next(true);
+        } }, 'Enregistrer'),
+      ));
+    };
+
+    ctx.next = (saved) => {
+      if (saved) savedCount++; else skippedCount++;
+      idx++;
+      render();
+    };
+
+    render();
+    return body;
+  });
+}
+
+// =============================================================
 // Boot
 // =============================================================
 
@@ -3189,6 +3472,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 
   $$('.nav-btn').forEach(b => b.addEventListener('click', () => { navigate(b.dataset.view); closeNav(); }));
+  const reviewBtn = $('#review-btn');
+  if (reviewBtn) reviewBtn.addEventListener('click', () => { closeNav(); openDailyReview(); });
   $('#import-file').addEventListener('change', (e) => { if (e.target.files[0]) importData(e.target.files[0]); });
   const settingsBtn = $('#settings-btn');
   if (settingsBtn) settingsBtn.addEventListener('click', () => { navigate('settings'); closeNav(); });
