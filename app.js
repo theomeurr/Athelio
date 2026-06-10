@@ -2767,6 +2767,74 @@ function showBackupReminderIfNeeded() {
 
 function closeNav() { document.body.classList.remove('nav-open'); }
 
+// Glisser vers la gauche pour fermer le menu mobile (le panneau suit le doigt)
+function setupNavSwipe() {
+  const sidebar = $('.sidebar');
+  const backdrop = $('#nav-backdrop');
+  if (!sidebar || !backdrop) return;
+
+  let startX = 0, startY = 0, curX = 0, lastX = 0, lastT = 0, velocity = 0;
+  let tracking = false, dragging = false;
+
+  const onStart = (e) => {
+    if (!document.body.classList.contains('nav-open')) return;
+    const t = e.touches[0];
+    startX = lastX = t.clientX;
+    startY = t.clientY;
+    lastT = e.timeStamp;
+    curX = 0;
+    velocity = 0;
+    tracking = true;
+    dragging = false;
+  };
+
+  const onMove = (e) => {
+    if (!tracking) return;
+    const t = e.touches[0];
+    const dx = t.clientX - startX;
+    const dy = t.clientY - startY;
+
+    if (!dragging) {
+      if (Math.abs(dx) < 10 && Math.abs(dy) < 10) return;
+      // Geste plutôt vertical : on laisse le scroll du menu faire son travail
+      if (Math.abs(dy) > Math.abs(dx)) { tracking = false; return; }
+      dragging = true;
+      sidebar.classList.add('dragging');
+      backdrop.classList.add('dragging');
+    }
+
+    e.preventDefault();
+    const dt = e.timeStamp - lastT || 1;
+    velocity = (t.clientX - lastX) / dt; // px/ms — négatif vers la gauche
+    lastX = t.clientX;
+    lastT = e.timeStamp;
+
+    curX = Math.min(0, dx);
+    sidebar.style.transform = `translateX(${curX}px)`;
+    backdrop.style.opacity = String(Math.max(0, 1 + curX / sidebar.offsetWidth));
+  };
+
+  const onEnd = () => {
+    tracking = false;
+    if (!dragging) return;
+    dragging = false;
+    const shouldClose = -curX > sidebar.offsetWidth * 0.35 || velocity < -0.35;
+    // On relâche le suivi du doigt : la transition CSS termine le mouvement en douceur
+    sidebar.classList.remove('dragging');
+    backdrop.classList.remove('dragging');
+    sidebar.style.transform = '';
+    backdrop.style.opacity = '';
+    if (shouldClose) closeNav();
+  };
+
+  [sidebar, backdrop].forEach((elm) => {
+    elm.addEventListener('touchstart', onStart, { passive: true });
+    elm.addEventListener('touchmove', onMove, { passive: false });
+    elm.addEventListener('touchend', onEnd);
+    elm.addEventListener('touchcancel', onEnd);
+  });
+}
+
 document.addEventListener('DOMContentLoaded', async () => {
   // 1) Verrou PIN si configuré
   if (getPinConfig()) {
@@ -2790,6 +2858,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   const backdrop = $('#nav-backdrop');
   if (toggle) toggle.addEventListener('click', () => document.body.classList.toggle('nav-open'));
   if (backdrop) backdrop.addEventListener('click', closeNav);
+  setupNavSwipe();
 
   navigate('dashboard');
 
