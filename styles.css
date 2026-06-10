@@ -823,6 +823,8 @@ body.locked { overflow: hidden; }
   border-radius: 99px;
   padding: 2px 8px;
 }
+.group-pill.neglected { border-color: rgba(235, 122, 112, 0.45); }
+.group-pill.neglected .group-pill-count { background: rgba(235, 122, 112, 0.18); color: var(--danger); }
 
 /* Mood scale */
 .scale {

@@ -18,6 +18,7 @@ const defaultState = {
   mobilityVideos: [],
   sobriety: [],
   comparisons: [],
+  settings: { liftWeeklyTarget: 3 },
 };
 
 let state = load();
@@ -52,6 +53,7 @@ function migrate(parsed) {
   }
   if (!Array.isArray(s.badminton.matches)) s.badminton.matches = [];
   if (!Array.isArray(s.badminton.tournaments)) s.badminton.tournaments = [];
+  s.settings = { ...defaultState.settings, ...(parsed.settings || {}) };
   // Migration : matchs en 1 score → tableau de sets
   s.badminton.matches = s.badminton.matches.map(m => {
     if (Array.isArray(m.sets) && m.sets.length) return m;
@@ -1212,6 +1214,104 @@ function isoWeekStart(dateStr) {
   return d.toISOString().slice(0, 10);
 }
 
+// Groupes pertinents pour l'alerte de négligence (on saute cardio/fullbody : trop génériques)
+const TRACKED_GROUPS_FOR_ALERT = ['chest', 'back', 'shoulders', 'arms', 'legs', 'glutes', 'core'];
+
+function neglectedGroups(allLifts, thresholdDays) {
+  const todayMs = Date.now();
+  const lastByGroup = {};
+  allLifts.forEach(l => {
+    const t = new Date(l.date).getTime();
+    (l.groups || []).forEach(g => {
+      if (l.groups.includes('fullbody')) {
+        // une séance full-body compte pour tous les groupes principaux
+        TRACKED_GROUPS_FOR_ALERT.forEach(k => { if (!lastByGroup[k] || t > lastByGroup[k]) lastByGroup[k] = t; });
+      } else if (!lastByGroup[g] || t > lastByGroup[g]) {
+        lastByGroup[g] = t;
+      }
+    });
+  });
+  // Sur les groupes suivis : on alerte ceux jamais travaillés OU pas travaillés depuis ≥ threshold j
+  // (mais on n'alerte pas sur un groupe jamais touché si l'utilisateur n'a quasi pas de séances :
+  //  inutile de râler dès la première semaine — d'où la condition sur le total de séances)
+  const haveEnoughHistory = allLifts.length >= 4;
+  const items = [];
+  TRACKED_GROUPS_FOR_ALERT.forEach(g => {
+    const last = lastByGroup[g];
+    if (!last) {
+      if (haveEnoughHistory) items.push({ key: g, days: null });
+      return;
+    }
+    const days = Math.floor((todayMs - last) / 86400000);
+    if (days >= thresholdDays) items.push({ key: g, days });
+  });
+  // Trie : jamais d'abord, puis du plus négligé au moins négligé
+  items.sort((a, b) => (b.days ?? 1e9) - (a.days ?? 1e9));
+  return items;
+}
+
+function neglectedGroupsCard(items) {
+  const card = el('div', { class: 'card' });
+  card.appendChild(el('h3', {}, '⚠️ Groupes à reprendre'));
+  card.appendChild(el('p', { style: 'color: var(--text-dim); font-size: 13px; margin: 0 0 12px;' },
+    items.length > 1 ? 'Ces groupes n\'ont pas été travaillés récemment.' : 'Ce groupe n\'a pas été travaillé récemment.'));
+  const pills = el('div', { class: 'group-pills' });
+  items.forEach(({ key, days }) => {
+    const txt = days == null ? 'jamais' : `${days} j`;
+    pills.appendChild(el('div', { class: 'group-pill neglected' },
+      el('span', { class: 'group-pill-label' }, muscleLabel(key)),
+      el('span', { class: 'group-pill-count' }, txt),
+    ));
+  });
+  card.appendChild(pills);
+  return card;
+}
+
+function weeklyTargetCard(done, target) {
+  const pct = Math.min(100, Math.round((done / target) * 100));
+  const reached = done >= target;
+  const card = el('div', { class: 'card' });
+  card.appendChild(el('div', { style: 'display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex-wrap: wrap;' },
+    el('h3', { style: 'margin: 0;' }, '🎯 Objectif hebdo'),
+    el('div', { style: 'font-size: 12px; color: var(--text-dim); display: flex; gap: 8px; align-items: center;' },
+      el('span', {}, `${done} / ${target} séances`),
+      el('button', { class: 'icon-btn', title: 'Modifier l\'objectif', onClick: () => openLiftTargetForm() }, '✎'),
+    ),
+  ));
+  const bar = el('div', { class: 'progress', style: 'margin-top: 12px; height: 10px;' });
+  const fill = el('div', { class: `progress-fill${reached ? ' full' : ''}`, style: `width: ${pct}%;` });
+  bar.appendChild(fill);
+  card.appendChild(bar);
+  card.appendChild(el('p', { style: `margin: 8px 0 0; font-size: 12px; color: ${reached ? 'var(--success)' : 'var(--text-dim)'};` },
+    reached ? `✅ Objectif atteint — ${done - target > 0 ? `+${done - target} bonus` : 'pile sur le rythme'}.`
+            : `Encore ${target - done} séance${target - done > 1 ? 's' : ''} d'ici dimanche.`));
+  return card;
+}
+
+function openLiftTargetForm() {
+  openModal('Objectif hebdo', (close) => {
+    const cur = +(state.settings?.liftWeeklyTarget) || 3;
+    const form = el('form', { class: 'form', onSubmit: (e) => {
+      e.preventDefault();
+      const d = Object.fromEntries(new FormData(e.target));
+      const n = Math.max(1, Math.min(14, +d.target || 3));
+      state.settings = { ...(state.settings || {}), liftWeeklyTarget: n };
+      save(); close(); navigate('lifts'); toast(`Objectif : ${n} séance${n > 1 ? 's' : ''}/sem`);
+    } });
+    form.innerHTML = `
+      <div><label>Nombre de séances par semaine</label>
+        <input type="number" name="target" min="1" max="14" step="1" value="${cur}" required></div>
+      <p class="form-hint">La semaine commence le lundi.</p>
+      <div class="form-actions">
+        <button type="button" class="btn secondary">Annuler</button>
+        <button type="submit" class="btn">Enregistrer</button>
+      </div>
+    `;
+    form.querySelector('button[type=button]').onclick = close;
+    return form;
+  });
+}
+
 views.lifts = () => {
   const wrap = el('div');
   wrap.appendChild(viewHeader('Musculation', 'Quel jour, quel groupe — pour te souvenir. Les détails de séries sont dans Hevy.',
@@ -1230,15 +1330,27 @@ views.lifts = () => {
   const lastWeek = all.filter(l => l.date >= lastWeekStart && l.date < thisWeekStart);
   const delta = thisWeek.length - lastWeek.length;
 
+  const target = Math.max(1, +(state.settings?.liftWeeklyTarget) || 3);
   const kpis = el('div', { class: 'grid cols-3' });
   kpis.appendChild(kpiCard('🗓️ Cette semaine', String(thisWeek.length), thisWeek.length > 1 ? 'séances' : 'séance',
-    thisWeek.length >= 3 ? 'success' : (thisWeek.length ? 'accent' : 'danger')));
+    thisWeek.length >= target ? 'success' : (thisWeek.length ? 'accent' : 'danger')));
   kpis.appendChild(kpiCard('⏪ Semaine dernière', String(lastWeek.length),
     delta === 0 ? '= même rythme' : (delta > 0 ? `+${delta} cette semaine` : `${delta} cette semaine`),
     delta >= 0 ? 'success' : 'danger'));
   kpis.appendChild(kpiCard('📊 Total séances', String(all.length), all.length ? `depuis ${fmtDate(all.at(-1).date)}` : ''));
   wrap.appendChild(kpis);
   wrap.appendChild(el('div', { style: 'height: 16px;' }));
+
+  // Objectif hebdo : jauge de progression
+  wrap.appendChild(weeklyTargetCard(thisWeek.length, target));
+  wrap.appendChild(el('div', { style: 'height: 16px;' }));
+
+  // Alerte : groupes négligés (pas travaillés depuis ≥ 10 jours)
+  const neglected = neglectedGroups(all, 10);
+  if (neglected.length) {
+    wrap.appendChild(neglectedGroupsCard(neglected));
+    wrap.appendChild(el('div', { style: 'height: 16px;' }));
+  }
 
   // Graphique : séances par semaine (8 dernières)
   const chartCard = el('div', { class: 'card' }, el('h3', {}, 'Fréquence par semaine'),
