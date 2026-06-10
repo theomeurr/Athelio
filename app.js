@@ -1752,10 +1752,45 @@ function parseVideo(url) {
   return { type: 'link', src: url };
 }
 
+// Génère une miniature JPEG (dataURL) à partir d'un fichier vidéo local.
+// Capture une frame vers 1 s (ou mi-durée si plus court), redimensionnée à 480px.
+function makeVideoThumb(file, { width = 480 } = {}) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const url = URL.createObjectURL(file);
+    const video = document.createElement('video');
+    const done = (thumb) => {
+      if (settled) return;
+      settled = true;
+      URL.revokeObjectURL(url);
+      resolve(thumb);
+    };
+    video.muted = true;
+    video.playsInline = true;
+    video.preload = 'metadata';
+    video.onerror = () => done(null);
+    video.onloadedmetadata = () => {
+      video.currentTime = Math.min(1, (video.duration || 2) / 2);
+    };
+    video.onseeked = () => {
+      try {
+        const ratio = video.videoHeight && video.videoWidth ? video.videoHeight / video.videoWidth : 9 / 16;
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = Math.round(width * ratio);
+        canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
+        done(canvas.toDataURL('image/jpeg', 0.72));
+      } catch { done(null); }
+    };
+    video.src = url;
+    setTimeout(() => done(null), 8000); // garde-fou (codec non supporté, fichier corrompu…)
+  });
+}
+
 function videoEmbed(v) {
   // Vidéo fichier dans IndexedDB : on insère un placeholder puis on injecte la vraie src
   if (v.blobKey) {
-    const video = el('video', { controls: '', preload: 'metadata' });
+    const video = el('video', { controls: '', preload: 'metadata', poster: v.thumb || null });
     getVideoBlobUrl(v.blobKey).then((url) => {
       if (url) video.src = url;
       else video.replaceWith(el('div', { class: 'video-fallback' }, 'Vidéo introuvable (cache vidé ?)'));
@@ -1821,6 +1856,7 @@ function openVideoForm(opts = {}) {
   const navView = opts.navView || 'videos';
   openModal('Ajouter une vidéo', (close) => {
     let pendingFile = null;
+    let pendingThumb = null;
     const form = el('form', { class: 'form', onSubmit: async (e) => {
       e.preventDefault();
       const d = Object.fromEntries(new FormData(e.target));
@@ -1834,6 +1870,7 @@ function openVideoForm(opts = {}) {
           entry.blobKey = key;
           entry.size = pendingFile.size;
           entry.mime = pendingFile.type;
+          if (pendingThumb) entry.thumb = pendingThumb;
         } catch (err) {
           toast('Stockage refusé par le navigateur : ' + (err?.message || err));
           return;
@@ -1855,6 +1892,7 @@ function openVideoForm(opts = {}) {
       <div><label>Lien vidéo</label><input type="url" name="url" placeholder="https://youtube.com/… ou Vimeo, Drive…"></div>
       <div><label>… ou importer un fichier vidéo</label><input type="file" accept="video/*" name="file"></div>
       <p class="form-hint file-hint">Stockage local jusqu'à ~500 Mo par fichier. Au-delà, préfère un lien (YouTube, Vimeo, Drive).</p>
+      <img class="video-thumb-preview" alt="Aperçu de la vidéo" hidden>
       <div><label>Notes</label><textarea name="notes" placeholder="Ce que tu observes, axes de travail…"></textarea></div>
       <div class="form-actions">
         <button type="button" class="btn secondary">Annuler</button>
@@ -1863,8 +1901,12 @@ function openVideoForm(opts = {}) {
     `;
     const fileInput = form.querySelector('input[type=file]');
     const hint = form.querySelector('.file-hint');
+    const preview = form.querySelector('.video-thumb-preview');
     fileInput.addEventListener('change', (e) => {
       const f = e.target.files[0];
+      pendingThumb = null;
+      preview.hidden = true;
+      preview.removeAttribute('src');
       if (!f) { pendingFile = null; hint.textContent = 'Stockage local jusqu\'à ~500 Mo par fichier. Au-delà, préfère un lien.'; return; }
       if (f.size > 500_000_000) {
         toast('Fichier trop lourd (max 500 Mo). Préfère un lien.');
@@ -1872,6 +1914,12 @@ function openVideoForm(opts = {}) {
       }
       pendingFile = f;
       hint.textContent = `📦 ${f.name} — ${(f.size / 1_000_000).toFixed(1)} Mo, sera stocké dans IndexedDB (hors-ligne).`;
+      makeVideoThumb(f).then((thumb) => {
+        if (pendingFile !== f || !thumb) return; // fichier changé entre-temps ou capture impossible
+        pendingThumb = thumb;
+        preview.src = thumb;
+        preview.hidden = false;
+      });
     });
     form.querySelector('button[type=button]').onclick = close;
     return form;

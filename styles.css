@@ -1067,3 +1067,13 @@ body.locked { overflow: hidden; }
   white-space: pre-wrap;
   line-height: 1.45;
 }
+
+/* Aperçu miniature dans le formulaire d'import vidéo */
+.video-thumb-preview {
+  width: 100%;
+  max-height: 200px;
+  object-fit: cover;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  animation: fade 0.2s ease;
+}
