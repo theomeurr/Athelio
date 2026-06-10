@@ -73,6 +73,11 @@ body {
   color: #0a1828;
   font-size: 18px;
   box-shadow: 0 6px 18px rgba(246, 201, 160, 0.25);
+  background-image: url("logo-icon.svg");
+  background-size: cover;
+  background-position: center;
+  color: transparent;
+  text-indent: -9999px;
 }
 #nav {
   display: flex;
@@ -482,16 +487,11 @@ tr:hover td { background: rgba(255, 255, 255, 0.02); }
   gap: 12px;
 }
 .lock-logo {
-  width: 64px;
-  height: 64px;
-  border-radius: 16px;
-  background: linear-gradient(135deg, var(--accent), var(--accent-2));
-  color: #0a1828;
-  font-weight: 800;
-  font-size: 32px;
-  display: grid;
-  place-items: center;
-  box-shadow: 0 12px 28px rgba(246, 201, 160, 0.3);
+  width: 84px;
+  height: 84px;
+  border-radius: 22px;
+  background: #0a1828 url("logo-icon.svg") center/cover no-repeat;
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(246, 201, 160, 0.15);
 }
 .lock-title { margin: 4px 0 0; font-size: 24px; letter-spacing: -0.5px; }
 .lock-sub { margin: 0 0 6px; color: var(--text-dim); font-size: 13px; }

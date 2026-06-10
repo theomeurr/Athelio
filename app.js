@@ -2798,7 +2798,7 @@ function showLockScreen() {
     const root = $('#modal-root');
     const overlay = el('div', { class: 'lock-screen' },
       el('div', { class: 'lock-card' },
-        el('div', { class: 'lock-logo' }, 'A'),
+        el('div', { class: 'lock-logo', 'aria-label': 'Athelio' }),
         el('h2', { class: 'lock-title' }, 'Athelio'),
         el('p', { class: 'lock-sub' }, 'Entre ton code PIN'),
         el('input', { type: 'password', inputmode: 'numeric', autocomplete: 'off',
