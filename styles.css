@@ -83,6 +83,46 @@ body {
   gap: 4px;
   flex: 1;
 }
+/* Bouton Review du jour (en haut des catégories) */
+.review-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  background: linear-gradient(135deg, var(--accent), #eeb88b);
+  color: #0a1828;
+  border: none;
+  padding: 12px;
+  border-radius: var(--radius-sm);
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+  margin-bottom: 10px;
+  transition: 0.15s;
+}
+.review-btn:hover { transform: translateY(-1px); box-shadow: 0 8px 20px rgba(246, 201, 160, 0.25); }
+
+/* Wizard de review */
+.review-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.review-count {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+.review-title { margin: 0 0 4px; font-size: 17px; }
+.review-question {
+  margin: 0 0 14px;
+  color: var(--text-dim);
+  font-size: 13px;
+}
+
 .nav-btn {
   display: flex;
   align-items: center;
