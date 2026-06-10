@@ -554,12 +554,12 @@ function chart(ctx, config) {
 }
 
 const chartTheme = {
-  text: '#8a9aae',
-  grid: 'rgba(255,255,255,0.05)',
-  accent: '#ff5b2e',
-  accent2: '#ffb547',
-  info: '#3aa8ff',
-  success: '#2ecc71',
+  text: '#b5bbc8',
+  grid: 'rgba(252,239,221,0.06)',
+  accent: '#f6c9a0',
+  accent2: '#fcefdd',
+  info: '#7fb3d9',
+  success: '#6fcf97',
 };
 
 function baseScales(yLabel = '') {
@@ -692,7 +692,7 @@ views.dashboard = () => {
             label: 'Poids (kg)',
             data: state.weight.map(w => w.value),
             borderColor: chartTheme.accent,
-            backgroundColor: 'rgba(255, 91, 46, 0.15)',
+            backgroundColor: 'rgba(246, 201, 160, 0.15)',
             fill: true,
             tension: 0.35,
             pointRadius: 4,
@@ -1107,7 +1107,7 @@ views.weight = () => {
       data: {
         labels: sorted.map(w => shortDate(w.date)),
         datasets: [{ label: 'Poids', data: sorted.map(w => w.value),
-          borderColor: chartTheme.accent, backgroundColor: 'rgba(255,91,46,0.15)', fill: true, tension: 0.35, pointRadius: 4 }],
+          borderColor: chartTheme.accent, backgroundColor: 'rgba(246,201,160,0.15)', fill: true, tension: 0.35, pointRadius: 4 }],
       },
       options: { responsive: true, maintainAspectRatio: false,
         plugins: { legend: { display: false } }, scales: baseScales('kg') }
@@ -1393,8 +1393,8 @@ const BODY_SVG = `
 <svg viewBox="0 0 320 500" role="img" aria-label="Schéma des points de mensuration">
   <defs>
     <linearGradient id="bodyGrad" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#26303f"/>
-      <stop offset="1" stop-color="#1b2330"/>
+      <stop offset="0" stop-color="#2f4a5e"/>
+      <stop offset="1" stop-color="#16293c"/>
     </linearGradient>
   </defs>
   <g fill="url(#bodyGrad)">
@@ -1408,25 +1408,25 @@ const BODY_SVG = `
     <rect x="124" y="238" width="30" height="214" rx="15"/>
     <rect x="166" y="238" width="30" height="214" rx="15"/>
   </g>
-  <g stroke="#ff5b2e" stroke-width="2" fill="none" stroke-dasharray="5 4" stroke-linecap="round">
+  <g stroke="#f6c9a0" stroke-width="2" fill="none" stroke-dasharray="5 4" stroke-linecap="round">
     <line x1="104" y1="120" x2="216" y2="120"/>
     <line x1="112" y1="182" x2="208" y2="182"/>
     <ellipse cx="93" cy="150" rx="20" ry="11"/>
     <ellipse cx="139" cy="300" rx="22" ry="12"/>
   </g>
-  <g stroke="#ff5b2e" stroke-width="1.5">
+  <g stroke="#f6c9a0" stroke-width="1.5">
     <line x1="216" y1="120" x2="244" y2="120"/>
     <line x1="208" y1="182" x2="244" y2="182"/>
     <line x1="73" y1="150" x2="52" y2="150"/>
     <line x1="117" y1="300" x2="60" y2="300"/>
   </g>
-  <g fill="#ff5b2e">
+  <g fill="#f6c9a0">
     <circle cx="244" cy="120" r="2.5"/>
     <circle cx="244" cy="182" r="2.5"/>
     <circle cx="52" cy="150" r="2.5"/>
     <circle cx="60" cy="300" r="2.5"/>
   </g>
-  <g fill="#e6edf6" font-family="Inter, sans-serif" font-size="13" font-weight="600">
+  <g fill="#fcefdd" font-family="Inter, sans-serif" font-size="13" font-weight="600">
     <text x="250" y="124">Poitrine</text>
     <text x="250" y="186">Taille</text>
     <text x="46" y="154" text-anchor="end">Bras</text>
@@ -2103,7 +2103,7 @@ views.recovery = () => {
       data: {
         labels: arr.map(r => shortDate(r.date)),
         datasets: [
-          { label: 'Fatigue', data: arr.map(r => r.fatigue), borderColor: chartTheme.accent, backgroundColor: 'rgba(255,91,46,0.15)', tension: 0.3, fill: true, pointRadius: 4 },
+          { label: 'Fatigue', data: arr.map(r => r.fatigue), borderColor: chartTheme.accent, backgroundColor: 'rgba(246,201,160,0.15)', tension: 0.3, fill: true, pointRadius: 4 },
           { label: 'Douleurs', data: arr.map(r => r.pain), borderColor: chartTheme.accent2, backgroundColor: chartTheme.accent2, tension: 0.3, fill: false, pointRadius: 4 },
         ],
       },
@@ -2357,9 +2357,9 @@ function openSobrietyDay(dateStr) {
     };
 
     const actions = el('div', { style: 'display: flex; gap: 8px;' },
-      el('button', { class: 'btn', style: 'flex:1; background: linear-gradient(135deg, #2ecc71, #27ae60); color: #0a1a0e;',
+      el('button', { class: 'btn', style: 'flex:1; background: linear-gradient(135deg, #6fcf97, #4fb97f); color: #0a1828;',
         onClick: () => setEntry(false) }, '✅ Journée saine'),
-      el('button', { class: 'btn', style: 'flex:1; background: linear-gradient(135deg, #e74c3c, #c0392b); color: #1a0a0a;',
+      el('button', { class: 'btn', style: 'flex:1; background: linear-gradient(135deg, #eb7a70, #d65c52); color: #0a1828;',
         onClick: () => {
           close();
           openSobrietySlipForm(dateStr, existing);
@@ -2549,9 +2549,6 @@ views.settings = () => {
     });
   });
 
-  // --- Rappels ---
-  wrap.appendChild(notifSettingsCard());
-
   // --- Google Drive ---
   wrap.appendChild(driveSettingsCard());
 
@@ -2571,84 +2568,6 @@ views.settings = () => {
 
   return wrap;
 };
-
-function notifSettingsCard() {
-  const s = getNotifSettings();
-  const perm = notifPermission();
-  const card = el('div', { class: 'card', style: 'margin-top: 16px;' });
-  card.appendChild(el('h3', {}, '🔔 Rappels'));
-
-  const permTxt = perm === 'granted' ? '🟢 Notifications système autorisées'
-    : perm === 'denied' ? '🔴 Notifications bloquées (à débloquer dans le navigateur)'
-    : perm === 'unsupported' ? '⚠️ Notifications système non supportées ici (la bannière in-app fonctionne quand même)'
-    : '⚪ Permission non demandée — clique sur « Activer » pour autoriser';
-  card.appendChild(el('p', { style: 'color: var(--text-dim); font-size: 13px; margin: 0 0 12px;' }, permTxt));
-
-  // Toggle global
-  card.appendChild(notifToggleRow(
-    'Activer les rappels',
-    'Bannière in-app + notification système si autorisé.',
-    s.enabled,
-    async (val) => {
-      if (val) await requestNotifPermission(); // on n'échoue pas si refusé : bannière in-app suffit
-      const cur = getNotifSettings();
-      cur.enabled = val;
-      setNotifSettings(cur);
-      if (val) startNotifLoop();
-      else if (notifTickInterval) { clearInterval(notifTickInterval); notifTickInterval = null; }
-      navigate('settings');
-    },
-  ));
-
-  if (!s.enabled) return card;
-
-  const items = [
-    ['weighIn',           '⚖️ Pesée du lundi',         'Lundi à 7h00'],
-    ['recoveryEvening',   '🌙 Récupération du soir',   'Tous les soirs à 21h30'],
-    ['sobrietyEvening',   '🥗 Sobriété',                'Tous les soirs à 21h00 — « as-tu fait un écart ? »'],
-    ['monthlyBody',       '📏 Suivi mensuel',           '1er du mois à 9h00 (mensurations + photo)'],
-    ['goalDeadline',      '🎯 Échéances d\'objectif',   'À J-7 et J-1'],
-    ['streakCelebration', '🔥 Séries (motivation)',     '1 semaine sobriété · 10 jours de suivi récup'],
-  ];
-  items.forEach(([key, title, sub]) => {
-    card.appendChild(notifToggleRow(title, sub, s[key], (val) => {
-      const cur = getNotifSettings();
-      cur[key] = val;
-      setNotifSettings(cur);
-    }));
-  });
-
-  card.appendChild(el('div', { style: 'margin-top: 12px; display: flex; gap: 8px; flex-wrap: wrap;' },
-    el('button', { class: 'btn secondary', onClick: () => {
-      fireNotification('🔔 Notification de test', 'Si tu vois ça, les rappels fonctionnent.', { tag: 'test', view: 'dashboard' });
-    } }, 'Tester une notification'),
-    el('button', { class: 'btn secondary', onClick: () => confirmAction('Réinitialiser l\'historique d\'envoi ? Les rappels du jour pourront se redéclencher.', () => {
-      setNotifSent({}); toast('Historique remis à zéro');
-    }) }, 'Réinitialiser l\'historique'),
-  ));
-
-  return card;
-}
-
-function notifToggleRow(title, sub, value, onChange) {
-  const btn = el('button', {
-    class: `notif-switch ${value ? 'on' : ''}`,
-    type: 'button',
-    onClick: () => {
-      const next = !btn.classList.contains('on');
-      btn.classList.toggle('on', next);
-      btn.textContent = next ? 'Activé' : 'Désactivé';
-      onChange(next);
-    },
-  }, value ? 'Activé' : 'Désactivé');
-  return el('div', { class: 'list-item' },
-    el('div', {},
-      el('div', { class: 'title' }, title),
-      el('div', { class: 'meta' }, sub),
-    ),
-    btn,
-  );
-}
 
 function driveSettingsCard() {
   const card = el('div', { class: 'card', style: 'margin-top: 16px;' });
@@ -2843,225 +2762,6 @@ function showBackupReminderIfNeeded() {
 }
 
 // =============================================================
-// Notifications (rappels de saisie)
-// =============================================================
-
-const NOTIF_KEY = 'athelio:notifs';
-const NOTIF_SENT_KEY = 'athelio:notifs:sent';
-
-const defaultNotifSettings = {
-  enabled: false,
-  weighIn: true,           // lundi 7h
-  recoveryEvening: true,   // tous les soirs 21h30
-  sobrietyEvening: true,   // tous les soirs 21h
-  monthlyBody: true,       // 1er du mois 9h
-  goalDeadline: true,      // J-7 et J-1
-  streakCelebration: true, // 7 j sobriété, 10 j récup
-};
-
-function getNotifSettings() {
-  try { return { ...defaultNotifSettings, ...(JSON.parse(localStorage.getItem(NOTIF_KEY)) || {}) }; }
-  catch { return { ...defaultNotifSettings }; }
-}
-function setNotifSettings(s) { localStorage.setItem(NOTIF_KEY, JSON.stringify(s)); }
-
-function getNotifSent() {
-  try { return JSON.parse(localStorage.getItem(NOTIF_SENT_KEY)) || {}; }
-  catch { return {}; }
-}
-function setNotifSent(map) { localStorage.setItem(NOTIF_SENT_KEY, JSON.stringify(map)); }
-
-function notifPermission() {
-  return 'Notification' in window ? Notification.permission : 'unsupported';
-}
-
-async function requestNotifPermission() {
-  if (!('Notification' in window)) {
-    toast('Ton navigateur ne supporte pas les notifications système.');
-    return false;
-  }
-  if (Notification.permission === 'granted') return true;
-  if (Notification.permission === 'denied') {
-    toast('Notifications bloquées — autorise-les dans les réglages du navigateur.');
-    return false;
-  }
-  const perm = await Notification.requestPermission();
-  return perm === 'granted';
-}
-
-async function fireNotification(title, body, { tag, view } = {}) {
-  // 1) Bannière in-app (toujours, même sans permission système)
-  showNotifBanner(title, body, view);
-  // 2) Notification système via SW si dispo
-  if (notifPermission() === 'granted') {
-    try {
-      const reg = await (navigator.serviceWorker?.ready);
-      const opts = { body, tag, icon: 'icon-192.png', badge: 'icon-192.png',
-        data: { view: view || 'dashboard', ts: Date.now() } };
-      if (reg && reg.showNotification) await reg.showNotification(title, opts);
-      else new Notification(title, opts);
-    } catch {}
-  }
-}
-
-function showNotifBanner(title, body, view) {
-  // Évite d'empiler plusieurs bannières identiques
-  const existing = document.querySelector(`.notif-banner[data-tag="${title}"]`);
-  if (existing) existing.remove();
-  const banner = el('div', { class: 'notif-banner', 'data-tag': title },
-    el('div', { class: 'notif-banner-body' },
-      el('strong', {}, title),
-      el('div', { class: 'notif-banner-text' }, body),
-    ),
-    el('div', { class: 'notif-banner-actions' },
-      view ? el('button', { class: 'btn small', onClick: () => { banner.remove(); navigate(view); } }, 'Ouvrir') : null,
-      el('button', { class: 'icon-btn', onClick: () => banner.remove() }, '✕'),
-    ),
-  );
-  document.body.appendChild(banner);
-  setTimeout(() => { if (banner.isConnected) banner.remove(); }, 30000);
-}
-
-function ymd(d) {
-  const y = d.getFullYear(), m = String(d.getMonth() + 1).padStart(2, '0'), day = String(d.getDate()).padStart(2, '0');
-  return `${y}-${m}-${day}`;
-}
-
-function lastWeekdayAt(now, weekday, hour, minute) {
-  // Dernier occurrence (≤ now) du jour de semaine donné à hh:mm
-  const d = new Date(now);
-  d.setHours(hour, minute, 0, 0);
-  while (d.getDay() !== weekday || d > now) d.setDate(d.getDate() - 1);
-  return d;
-}
-
-function todayAt(hour, minute) {
-  const d = new Date(); d.setHours(hour, minute, 0, 0); return d;
-}
-
-function recoveryStreakDays() {
-  const set = new Set(state.recovery.map(r => r.date));
-  if (!set.size) return 0;
-  const day = 86400000;
-  let cur = new Date(); cur.setHours(0,0,0,0);
-  if (!set.has(ymd(cur))) cur = new Date(cur.getTime() - day);
-  let n = 0;
-  while (set.has(ymd(cur))) { n++; cur = new Date(cur.getTime() - day); }
-  return n;
-}
-
-// Construit la liste des rappels à déclencher maintenant.
-function buildScheduledRules(now) {
-  const rules = [];
-  const sent = getNotifSent();
-  const s = getNotifSettings();
-  const todayStr = ymd(now);
-
-  // 1) Lundi 7h — pesée (skip si déjà pesé aujourd'hui)
-  if (s.weighIn) {
-    const target = lastWeekdayAt(now, 1, 7, 0);
-    const key = `weighIn:${ymd(target)}`;
-    const already = state.weight.some(w => w.date === todayStr);
-    if (now >= target && !sent[key] && !already) {
-      rules.push({ key, title: '⚖️ Pesée du lundi', body: '1 min pour rester sur la courbe.', view: 'weight' });
-    }
-  }
-
-  // 2) 21h30 — récupération (skip si déjà saisie aujourd'hui)
-  if (s.recoveryEvening) {
-    const target = todayAt(21, 30);
-    const key = `recovery:${todayStr}`;
-    const already = state.recovery.some(r => r.date === todayStr);
-    if (now >= target && !sent[key] && !already) {
-      rules.push({ key, title: '🌙 Récupération du soir', body: 'Note ta fatigue et tes douleurs.', view: 'recovery' });
-    }
-  }
-
-  // 3) 21h — sobriété (skip si déjà saisie aujourd'hui)
-  if (s.sobrietyEvening) {
-    const target = todayAt(21, 0);
-    const key = `sobriety:${todayStr}`;
-    const already = state.sobriety.some(x => x.date === todayStr);
-    if (now >= target && !sent[key] && !already) {
-      rules.push({ key, title: '🥗 Sobriété', body: 'As-tu fait un écart aujourd\'hui ?', view: 'sobriety' });
-    }
-  }
-
-  // 4) 1er du mois 9h — mensurations + photo
-  if (s.monthlyBody) {
-    const target = new Date(now.getFullYear(), now.getMonth(), 1, 9, 0, 0);
-    const key = `monthlyBody:${now.getFullYear()}-${now.getMonth() + 1}`;
-    if (now >= target && !sent[key]) {
-      rules.push({ key, title: '📏 Suivi mensuel', body: 'Mensurations + photo du mois.', view: 'measurements' });
-    }
-  }
-
-  // 5) Objectifs : J-7 et J-1
-  if (s.goalDeadline) {
-    state.goals.filter(g => !g.done && g.deadline).forEach(g => {
-      const deadline = new Date(g.deadline + 'T09:00:00');
-      const days = Math.ceil((deadline - now) / 86400000);
-      if (days === 7 || days === 1) {
-        const key = `goalDeadline:${g.id}:${days}`;
-        if (!sent[key]) {
-          rules.push({ key, title: '🎯 Objectif', body: `« ${g.title} » — plus que ${days} jour${days > 1 ? 's' : ''}.`, view: 'goals' });
-        }
-      }
-    });
-  }
-
-  // 6) Streaks (motivation)
-  if (s.streakCelebration) {
-    const sStreak = sobrietyStreak();
-    if (sStreak >= 7) {
-      const key = `streak:sobriety7:${todayStr}`;
-      if (!sent[key]) {
-        rules.push({ key, title: '🔥 1 semaine sans écart', body: `${sStreak} jours sains d'affilée — continue !`, view: 'sobriety' });
-      }
-    }
-    const rStreak = recoveryStreakDays();
-    if (rStreak >= 10) {
-      const key = `streak:recovery10:${todayStr}`;
-      if (!sent[key]) {
-        rules.push({ key, title: '🌙 10 jours de suivi récup', body: `${rStreak} jours d'affilée — belle régularité.`, view: 'recovery' });
-      }
-    }
-  }
-
-  return rules;
-}
-
-let notifTickInterval = null;
-
-function tickNotifications() {
-  const s = getNotifSettings();
-  if (!s.enabled) return;
-  const now = new Date();
-  const rules = buildScheduledRules(now);
-  if (!rules.length) return;
-  const sent = getNotifSent();
-  rules.forEach(r => {
-    fireNotification(r.title, r.body, { tag: r.key, view: r.view });
-    sent[r.key] = true;
-  });
-  // Garde les 300 dernières clés pour éviter la croissance infinie
-  const keys = Object.keys(sent);
-  if (keys.length > 300) {
-    const trimmed = {};
-    keys.slice(-300).forEach(k => trimmed[k] = sent[k]);
-    setNotifSent(trimmed);
-  } else {
-    setNotifSent(sent);
-  }
-}
-
-function startNotifLoop() {
-  if (notifTickInterval) clearInterval(notifTickInterval);
-  tickNotifications();
-  notifTickInterval = setInterval(tickNotifications, 60000);
-}
-
-// =============================================================
 // Boot
 // =============================================================
 
@@ -3099,20 +2799,4 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // 4) Auto-backup Google Drive (1/jour, silencieux)
   setTimeout(() => maybeAutoDriveBackup(), 2000); // laisse GSI se charger
-
-  // 5) Notifications / rappels
-  if (getNotifSettings().enabled) startNotifLoop();
-  document.addEventListener('visibilitychange', () => {
-    if (!document.hidden && getNotifSettings().enabled) tickNotifications();
-  });
-
-  // 6) Deep-link depuis un clic de notification système (postMessage du SW)
-  if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.addEventListener('message', (e) => {
-      if (e.data && e.data.type === 'navigate' && e.data.view) navigate(e.data.view);
-    });
-  }
-  const params = new URLSearchParams(window.location.search);
-  const notifView = params.get('notif');
-  if (notifView && views[notifView]) navigate(notifView);
 });
