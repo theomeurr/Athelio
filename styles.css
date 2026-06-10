@@ -73,9 +73,7 @@ body {
   color: #0a1828;
   font-size: 18px;
   box-shadow: 0 6px 18px rgba(246, 201, 160, 0.25);
-  background-image: url("logo-icon.svg");
-  background-size: cover;
-  background-position: center;
+  background: #0a1828 url("icon-192.png") center/cover no-repeat;
   color: transparent;
   text-indent: -9999px;
 }
@@ -487,10 +485,10 @@ tr:hover td { background: rgba(255, 255, 255, 0.02); }
   gap: 12px;
 }
 .lock-logo {
-  width: 84px;
-  height: 84px;
-  border-radius: 22px;
-  background: #0a1828 url("logo-icon.svg") center/cover no-repeat;
+  width: 96px;
+  height: 96px;
+  border-radius: 24px;
+  background: #0a1828 url("icon-512.png") center/cover no-repeat;
   box-shadow: 0 12px 28px rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(246, 201, 160, 0.15);
 }
 .lock-title { margin: 4px 0 0; font-size: 24px; letter-spacing: -0.5px; }
