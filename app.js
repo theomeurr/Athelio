@@ -3221,56 +3221,7 @@ function reviewSteps(ctx) {
     },
   });
 
-  // 📏 Mensurations
-  if (!state.measurements.some(m => m.date === t)) steps.push({
-    emoji: '📏', title: 'Mensurations', question: 'Jour de mesures ? (1×/mois suffit)',
-    build() {
-      const mk = () => el('input', { type: 'number', step: '0.5', min: '0' });
-      const chest = mk(), arm = mk(), waist = mk(), thigh = mk();
-      const box = el('div', { class: 'form' },
-        el('div', { class: 'form-row' },
-          el('div', {}, el('label', {}, 'Poitrine (cm)'), chest),
-          el('div', {}, el('label', {}, 'Bras (cm)'), arm),
-        ),
-        el('div', { class: 'form-row' },
-          el('div', {}, el('label', {}, 'Taille (cm)'), waist),
-          el('div', {}, el('label', {}, 'Cuisse (cm)'), thigh),
-        ),
-      );
-      return { el: box, save() {
-        const vals = [chest, arm, waist, thigh].map(i => i.value ? +i.value : null);
-        if (vals.every(v => v == null)) { toast('Entre au moins une mesure — ou clique sur Passer.'); return false; }
-        state.measurements.push({ id: id(), date: t, chest: vals[0], arm: vals[1], waist: vals[2], thigh: vals[3] });
-        save(); return true;
-      } };
-    },
-  });
-
-  // 📷 Photo
-  if (!state.photos.some(p => p.date === t)) steps.push({
-    emoji: '📷', title: 'Photo', question: 'Une photo de progression aujourd\'hui ?',
-    build() {
-      let file = null;
-      const label = el('input', { type: 'text', placeholder: 'Légende (facultatif)' });
-      const fileBtn = el('label', { class: 'btn secondary', style: 'display: block; text-align: center; cursor: pointer;' },
-        '📷 Choisir une photo',
-        el('input', { type: 'file', accept: 'image/*', hidden: '', onChange: (e) => {
-          file = e.target.files[0] || null;
-          fileBtn.firstChild.textContent = file ? `📦 ${file.name}` : '📷 Choisir une photo';
-        } }),
-      );
-      const box = el('div', { class: 'form' }, fileBtn, el('div', {}, el('label', {}, 'Légende'), label));
-      return { el: box, async save() {
-        if (!file) { toast('Choisis une photo — ou clique sur Passer.'); return false; }
-        try {
-          const data = await compressImage(file);
-          state.photos.push({ id: id(), date: t, label: label.value.trim(), data });
-          if (!save()) { state.photos.pop(); return false; }
-          return true;
-        } catch { toast('Impossible de charger cette image.'); return false; }
-      } };
-    },
-  });
+  // 📏 Mensurations et 📷 Photo : exclus de la review (rythme mensuel / ponctuel)
 
   // 🧘 AntiFragile (mobilité)
   if (!state.mobility.some(m => m.date === t)) steps.push({
