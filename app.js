@@ -1358,7 +1358,7 @@ views.lifts = () => {
   wrap.appendChild(chartCard);
 
   // Répartition par groupe musculaire (4 dernières semaines)
-  const groupCard = el('div', { class: 'card', style: 'margin-top: 16px;' }, el('h3', {}, 'Groupes travaillés (4 dernières semaines)'));
+  const groupCard = el('div', { class: 'card' }, el('h3', {}, 'Groupes travaillés (4 dernières semaines)'));
   const cutoff = (() => { const d = new Date(); d.setDate(d.getDate() - 28); return d.toISOString().slice(0, 10); })();
   const recent = all.filter(l => l.date >= cutoff);
   const groupCounts = {};
@@ -1374,7 +1374,40 @@ views.lifts = () => {
     )));
     groupCard.appendChild(pills);
   }
-  wrap.appendChild(groupCard);
+
+  // Répartition par salle (4 dernières semaines)
+  const gymCard = el('div', { class: 'card' }, el('h3', {}, 'Salles (4 dernières semaines)'));
+  const gymCounts = {};
+  recent.forEach(l => { if (l.gym) gymCounts[l.gym] = (gymCounts[l.gym] || 0) + 1; });
+  const noGymCount = recent.filter(l => !l.gym).length;
+  const taggedCount = recent.length - noGymCount;
+  if (!taggedCount) {
+    gymCard.appendChild(emptyState('Aucune salle taguée', 'Choisis « On Air » ou « Fitness » en créant une séance pour voir ta répartition.'));
+  } else {
+    gymCard.appendChild(el('div', { class: 'chart-wrap', style: 'height: 170px;' }, el('canvas', { id: 'gym-chart' })));
+    const favKey = Object.entries(gymCounts).sort((a, b) => b[1] - a[1])[0][0];
+    const gymPills = el('div', { class: 'group-pills', style: 'margin-top: 12px; justify-content: center;' });
+    GYMS.forEach(g => {
+      if (!gymCounts[g.key]) return;
+      const pct = Math.round((gymCounts[g.key] / taggedCount) * 100);
+      gymPills.appendChild(el('div', { class: 'group-pill' },
+        el('span', { class: 'group-pill-label' }, `${g.emoji} ${g.label}`),
+        el('span', { class: 'group-pill-count' }, `${gymCounts[g.key]} · ${pct} %`),
+      ));
+    });
+    if (noGymCount) gymPills.appendChild(el('div', { class: 'group-pill' },
+      el('span', { class: 'group-pill-label' }, '🏠 Sans salle'),
+      el('span', { class: 'group-pill-count', style: 'background: var(--panel-2); color: var(--text-dim);' }, String(noGymCount)),
+    ));
+    gymCard.appendChild(gymPills);
+    gymCard.appendChild(el('p', { style: 'margin: 10px 0 0; text-align: center; font-size: 12px; color: var(--text-dim);' },
+      `Salle favorite : ${gymLabel(favKey)} (${gymCounts[favKey]} séance${gymCounts[favKey] > 1 ? 's' : ''} sur ${taggedCount} taguée${taggedCount > 1 ? 's' : ''})`));
+  }
+
+  const statsGrid = el('div', { class: 'grid cols-2', style: 'margin-top: 16px;' });
+  statsGrid.appendChild(groupCard);
+  statsGrid.appendChild(gymCard);
+  wrap.appendChild(statsGrid);
 
   // Historique
   const list = el('div', { class: 'card', style: 'margin-top: 16px;' }, el('h3', {}, 'Historique'));
@@ -1427,6 +1460,27 @@ views.lifts = () => {
         scales: { ...baseScales(), y: { ...baseScales().y, ticks: { stepSize: 1, color: chartTheme.text }, beginAtZero: true } },
       },
     });
+
+    // Doughnut répartition par salle
+    const gymCanvas = $('#gym-chart');
+    if (gymCanvas) {
+      const labels = [], data = [], colors = [];
+      const gymColors = { onair: chartTheme.accent, fitness: chartTheme.info };
+      GYMS.forEach(g => {
+        if (!gymCounts[g.key]) return;
+        labels.push(g.label);
+        data.push(gymCounts[g.key]);
+        colors.push(gymColors[g.key] || chartTheme.success);
+      });
+      chart(gymCanvas.getContext('2d'), {
+        type: 'doughnut',
+        data: { labels, datasets: [{ data, backgroundColor: colors, borderColor: 'transparent' }] },
+        options: {
+          responsive: true, maintainAspectRatio: false, cutout: '62%',
+          plugins: { legend: { position: 'bottom', labels: { color: chartTheme.text } } },
+        },
+      });
+    }
   }, 0);
 
   return wrap;
