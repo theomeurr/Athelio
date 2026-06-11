@@ -241,7 +241,11 @@ let driveTokenClient = null;
 let driveToken = null; // { access_token, expires_at }
 
 function driveClientId()   { return localStorage.getItem(DRIVE_CLIENT_KEY) || ''; }
-function setDriveClientId(v) { v ? localStorage.setItem(DRIVE_CLIENT_KEY, v.trim()) : localStorage.removeItem(DRIVE_CLIENT_KEY); }
+function setDriveClientId(v) {
+  // Supprime TOUT espace/retour à la ligne/caractère invisible (copier-coller mobile)
+  const clean = (v || '').replace(/[\s​-‍﻿]/g, '');
+  clean ? localStorage.setItem(DRIVE_CLIENT_KEY, clean) : localStorage.removeItem(DRIVE_CLIENT_KEY);
+}
 function driveLastBackup() { return +localStorage.getItem(DRIVE_LAST_BACKUP) || 0; }
 
 function initDriveClient() {
@@ -3039,7 +3043,11 @@ function driveSettingsCard() {
   // Boutons
   const actions = el('div', { style: 'display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px;' },
     el('button', { class: 'btn secondary', onClick: () => {
-      const v = idInput.value.trim();
+      const v = idInput.value.replace(/[\s​-‍﻿]/g, '');
+      if (v && !/^[\w-]+\.apps\.googleusercontent\.com$/.test(v)) {
+        toast('⚠️ Format invalide — un Client ID finit par .apps.googleusercontent.com');
+        return;
+      }
       setDriveClientId(v);
       driveTokenClient = null; driveToken = null;
       localStorage.removeItem(DRIVE_FOLDER_KEY);
