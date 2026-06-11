@@ -251,6 +251,7 @@ body {
   .mobile-topbar {
     display: flex;
     align-items: center;
+    justify-content: space-between;
     gap: 12px;
     position: sticky;
     top: 0;
@@ -504,6 +505,44 @@ tr:hover td { background: rgba(255, 255, 255, 0.02); }
   color: var(--text);
 }
 @keyframes fade { from { opacity: 0; } to { opacity: 1; } }
+
+/* Splash screen (logo, avant l'écran PIN) */
+#splash {
+  position: fixed;
+  inset: 0;
+  z-index: 400;
+  background: var(--bg);
+  display: grid;
+  place-items: center;
+  transition: opacity 0.45s ease;
+}
+#splash.hide { opacity: 0; pointer-events: none; }
+.splash-logo {
+  width: 96px;
+  height: 96px;
+  border-radius: 24px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+  animation: splash-pulse 1.4s ease-in-out infinite;
+}
+@keyframes splash-pulse {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50%      { transform: scale(1.07); opacity: 0.85; }
+}
+
+/* Animation d'ouverture de l'app (après déverrouillage / splash) */
+.lock-screen.unlocking { animation: lock-out 0.4s ease forwards; }
+@keyframes lock-out {
+  to { opacity: 0; transform: scale(1.08); }
+}
+body.app-intro .mobile-topbar { animation: intro-top 0.45s cubic-bezier(0.22, 1, 0.36, 1) both; }
+body.app-intro #main { animation: intro-main 0.55s 0.08s cubic-bezier(0.22, 1, 0.36, 1) both; }
+@media (min-width: 721px) {
+  /* Sur mobile la sidebar est un tiroir hors écran : on ne l'anime qu'en desktop */
+  body.app-intro .sidebar { animation: intro-side 0.5s cubic-bezier(0.22, 1, 0.36, 1) both; }
+}
+@keyframes intro-side { from { transform: translateX(-24px); opacity: 0; } to { transform: none; opacity: 1; } }
+@keyframes intro-main { from { transform: translateY(18px); opacity: 0; } to { transform: none; opacity: 1; } }
+@keyframes intro-top  { from { transform: translateY(-12px); opacity: 0; } to { transform: none; opacity: 1; } }
 
 /* Lock screen (PIN) */
 .lock-screen {
