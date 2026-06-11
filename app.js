@@ -236,11 +236,15 @@ const DRIVE_FOLDER_KEY     = 'athelio:drive:folderId';
 const DRIVE_LAST_BACKUP    = 'athelio:drive:lastBackup';
 const DRIVE_SCOPE          = 'https://www.googleapis.com/auth/drive.file';
 const DRIVE_FOLDER_NAME    = 'Athelio Backups';
+// Client ID OAuth intégré par défaut (sûr à exposer : un Client ID web est public,
+// seule la liste des origines autorisées protège l'accès). Évite d'avoir à le
+// coller à la main sur chaque appareil. Reste surchargeable dans les réglages.
+const DEFAULT_DRIVE_CLIENT_ID = '1037611827802-e4290ortbq1t565nal8d35undkmp1fsg.apps.googleusercontent.com';
 
 let driveTokenClient = null;
 let driveToken = null; // { access_token, expires_at }
 
-function driveClientId()   { return localStorage.getItem(DRIVE_CLIENT_KEY) || ''; }
+function driveClientId()   { return localStorage.getItem(DRIVE_CLIENT_KEY) || DEFAULT_DRIVE_CLIENT_ID; }
 function setDriveClientId(v) {
   // Supprime TOUT espace/retour à la ligne/caractère invisible (copier-coller mobile)
   const clean = (v || '').replace(/[\s​-‍﻿]/g, '');
@@ -3008,41 +3012,40 @@ function driveSettingsCard() {
   card.appendChild(el('h3', {}, '☁️ Google Drive'));
 
   const clientId = driveClientId();
+  const usingCustom = !!localStorage.getItem(DRIVE_CLIENT_KEY);
   const last = driveLastBackup();
   const lastTxt = last ? `il y a ${Math.floor((Date.now() - last) / 3600000)} h` : 'jamais';
 
-  if (!clientId) {
-    card.appendChild(el('p', { style: 'color: var(--text-dim); font-size: 13px; margin: 0 0 8px;' },
-      'Configure un Client ID OAuth pour synchroniser tes données et vidéos avec ton Google Drive personnel.'));
-    card.appendChild(el('details', { style: 'margin: 8px 0 12px; font-size: 12px; color: var(--text-dim);' },
-      el('summary', { style: 'cursor: pointer; color: var(--accent);' }, 'Voir les étapes de configuration'),
-      el('ol', { style: 'padding-left: 18px; line-height: 1.7;' },
-        el('li', {}, 'Va sur ', el('a', { href: 'https://console.cloud.google.com/', target: '_blank', rel: 'noopener', style: 'color: var(--info);' }, 'console.cloud.google.com'), ' et crée un projet.'),
-        el('li', {}, 'Active l\'API Google Drive (APIs et services → Bibliothèque).'),
-        el('li', {}, 'Configure l\'écran de consentement OAuth en mode External + Testing, ajoute ton email comme testeur.'),
-        el('li', {}, 'Crée des identifiants OAuth 2.0 → Application Web.'),
-        el('li', {}, 'Ajoute l\'URL où tu héberges Athelio dans « Origines JavaScript autorisées » (ex: https://ton-app.netlify.app).'),
-        el('li', {}, 'Copie le Client ID (format: 123456789-abcdef.apps.googleusercontent.com) et colle-le ci-dessous.'),
-      ),
-    ));
-  } else {
-    card.appendChild(el('p', { style: 'color: var(--text-dim); font-size: 13px; margin: 0 0 12px;' },
-      `Dernière sauvegarde Drive : ${lastTxt}.`));
-  }
-
-  // Champ Client ID
-  const idInput = el('input', { type: 'text', value: clientId, placeholder: 'xxxxx.apps.googleusercontent.com',
-    style: 'width: 100%; background: var(--bg); border: 1px solid var(--border); color: var(--text); padding: 10px; border-radius: var(--radius-sm); font-size: 13px; font-family: monospace;' });
-  card.appendChild(el('label', { style: 'font-size: 11px; color: var(--text-dim); display: block; margin-bottom: 4px;' }, 'Client ID OAuth'));
-  card.appendChild(idInput);
+  card.appendChild(el('p', { style: 'color: var(--text-dim); font-size: 13px; margin: 0 0 12px;' },
+    driveConnected()
+      ? `🟢 Connecté · dernière sauvegarde ${lastTxt}.`
+      : 'Connecte-toi en un clic pour sauvegarder tes données et vidéos sur ton Google Drive. La sauvegarde se relance ensuite automatiquement 1 fois par jour.'));
 
   // Statut connexion
   const status = el('div', { id: 'drive-status', style: 'font-size: 12px; color: var(--text-dim); margin-top: 10px; min-height: 16px;' },
-    driveConnected() ? '🟢 Connecté' : (clientId ? '⚪ Non connecté' : ''));
+    driveConnected() ? '🟢 Connecté' : '⚪ Non connecté');
 
-  // Boutons
-  const actions = el('div', { style: 'display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px;' },
-    el('button', { class: 'btn secondary', onClick: () => {
+  // Bouton principal : se connecter (le Client ID intégré est déjà prêt)
+  const actions = el('div', { style: 'display: flex; gap: 8px; flex-wrap: wrap;' },
+    el('button', { class: 'btn', onClick: async () => {
+      $('#drive-status').textContent = '⏳ Connexion…';
+      try { await driveAuth(); $('#drive-status').textContent = '🟢 Connecté'; toast('Connecté à Google Drive'); navigate('settings'); }
+      catch (e) { $('#drive-status').textContent = '🔴 ' + e.message; toast('Échec de la connexion'); }
+    } }, driveConnected() ? '🔄 Rafraîchir la connexion' : '🔗 Se connecter à Google Drive'),
+    driveConnected() ? el('button', { class: 'btn secondary', onClick: () => { driveDisconnect(); navigate('settings'); } }, 'Déconnecter') : null,
+  );
+  card.appendChild(actions);
+  card.appendChild(status);
+
+  // Réglage avancé : remplacer le Client ID intégré par le sien (replié par défaut)
+  const idInput = el('input', { type: 'text', value: usingCustom ? clientId : '', placeholder: 'xxxxx.apps.googleusercontent.com',
+    style: 'width: 100%; background: var(--bg); border: 1px solid var(--border); color: var(--text); padding: 10px; border-radius: var(--radius-sm); font-size: 13px; font-family: monospace;' });
+  card.appendChild(el('details', { style: 'margin-top: 14px; font-size: 12px; color: var(--text-dim);' },
+    el('summary', { style: 'cursor: pointer; color: var(--accent);' }, 'Avancé : utiliser mon propre Client ID'),
+    el('p', { style: 'margin: 8px 0;' }, 'Un Client ID OAuth est déjà intégré à l\'app — laisse ce champ vide pour l\'utiliser. Pour passer par ton propre projet Google Cloud, colle ton Client ID ci-dessous.'),
+    el('label', { style: 'font-size: 11px; display: block; margin-bottom: 4px;' }, 'Client ID OAuth personnalisé'),
+    idInput,
+    el('button', { class: 'btn secondary', style: 'margin-top: 8px;', onClick: () => {
       const v = idInput.value.replace(/[\s​-‍﻿]/g, '');
       if (v && !/^[\w-]+\.apps\.googleusercontent\.com$/.test(v)) {
         toast('⚠️ Format invalide — un Client ID finit par .apps.googleusercontent.com');
@@ -3052,18 +3055,9 @@ function driveSettingsCard() {
       driveTokenClient = null; driveToken = null;
       localStorage.removeItem(DRIVE_FOLDER_KEY);
       navigate('settings');
-      toast(v ? 'Client ID enregistré' : 'Client ID supprimé');
-    } }, 'Enregistrer le Client ID'),
-    clientId ? el('button', { class: 'btn', onClick: async () => {
-      try { await driveAuth(); $('#drive-status').textContent = '🟢 Connecté'; toast('Connecté à Google Drive'); }
-      catch (e) { $('#drive-status').textContent = '🔴 ' + e.message; toast('Échec de la connexion'); }
-    } }, driveConnected() ? 'Rafraîchir le token' : 'Se connecter') : null,
-    driveConnected() ? el('button', { class: 'btn secondary', onClick: () => { driveDisconnect(); navigate('settings'); } }, 'Déconnecter') : null,
-  );
-  card.appendChild(actions);
-  card.appendChild(status);
-
-  if (!clientId) return card;
+      toast(v ? 'Client ID personnalisé enregistré' : 'Retour au Client ID intégré');
+    } }, 'Enregistrer'),
+  ));
 
   // Actions de sync
   const progress = el('div', { id: 'drive-progress', style: 'font-size: 13px; color: var(--accent); margin-top: 12px; min-height: 18px;' });
