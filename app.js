@@ -3439,26 +3439,26 @@ function openDailyReview() {
 
 function closeNav() { document.body.classList.remove('nav-open'); }
 
-// Tiroir au doigt : glisser depuis le bord gauche pour l'ouvrir,
-// glisser vers la gauche pour le fermer — le panneau suit le doigt
-// dans les deux sens, la transition CSS termine le mouvement.
+// Tiroir au doigt (côté droit) : glisser depuis le bord droit pour
+// l'ouvrir, le repousser vers la droite pour le fermer — le panneau
+// suit le doigt dans les deux sens, la transition CSS termine le mouvement.
 function setupNavSwipe() {
   const sidebar = $('.sidebar');
   const backdrop = $('#nav-backdrop');
   if (!sidebar || !backdrop) return;
 
   const isMobile = () => window.matchMedia('(max-width: 720px)').matches;
-  const EDGE = 28; // zone de déclenchement au bord gauche (px)
+  const EDGE = 28; // zone de déclenchement au bord droit (px)
 
   let startX = 0, startY = 0, curX = 0, lastX = 0, lastT = 0, velocity = 0;
   let tracking = false, dragging = false, mode = null; // 'open' | 'close'
 
-  // x = translateX du tiroir en px (-largeur = caché, 0 = ouvert)
+  // x = translateX du tiroir en px (+largeur = caché à droite, 0 = ouvert)
   const setDrawer = (x) => {
     const w = sidebar.offsetWidth;
-    curX = Math.max(-w, Math.min(0, x));
+    curX = Math.max(0, Math.min(w, x));
     sidebar.style.transform = `translateX(${curX}px)`;
-    backdrop.style.opacity = String(Math.max(0, 1 + curX / w));
+    backdrop.style.opacity = String(Math.max(0, 1 - curX / w));
   };
 
   const onStart = (e) => {
@@ -3466,12 +3466,12 @@ function setupNavSwipe() {
     const t = e.touches[0];
     const open = document.body.classList.contains('nav-open');
     if (open) mode = 'close';
-    else if (t.clientX <= EDGE) mode = 'open';
+    else if (t.clientX >= window.innerWidth - EDGE) mode = 'open';
     else { tracking = false; return; }
     startX = lastX = t.clientX;
     startY = t.clientY;
     lastT = e.timeStamp;
-    curX = open ? 0 : -sidebar.offsetWidth;
+    curX = open ? 0 : sidebar.offsetWidth;
     velocity = 0;
     tracking = true;
     dragging = false;
@@ -3487,8 +3487,8 @@ function setupNavSwipe() {
       if (Math.abs(dx) < 10 && Math.abs(dy) < 10) return;
       // Geste plutôt vertical : on laisse le scroll faire son travail
       if (Math.abs(dy) > Math.abs(dx)) { tracking = false; return; }
-      // Depuis le bord, seul un glissement vers la droite ouvre
-      if (mode === 'open' && dx < 0) { tracking = false; return; }
+      // Depuis le bord droit, seul un glissement vers la gauche ouvre
+      if (mode === 'open' && dx > 0) { tracking = false; return; }
       dragging = true;
       sidebar.classList.add('dragging');
       backdrop.classList.add('dragging');
@@ -3500,7 +3500,7 @@ function setupNavSwipe() {
     lastX = t.clientX;
     lastT = e.timeStamp;
 
-    setDrawer((mode === 'close' ? 0 : -sidebar.offsetWidth) + dx);
+    setDrawer((mode === 'close' ? 0 : sidebar.offsetWidth) + dx);
   };
 
   const onEnd = () => {
@@ -3514,9 +3514,11 @@ function setupNavSwipe() {
     sidebar.style.transform = '';
     backdrop.style.opacity = '';
     if (mode === 'close') {
-      if (-curX > w * 0.35 || velocity < -0.35) closeNav();
+      // Repoussé vers la droite au-delà du seuil (ou flick) → fermé
+      if (curX > w * 0.35 || velocity > 0.35) closeNav();
     } else {
-      const shouldOpen = curX > -w * 0.65 || velocity > 0.35;
+      // Tiré vers la gauche au-delà du seuil (ou flick) → ouvert
+      const shouldOpen = curX < w * 0.65 || velocity < -0.35;
       document.body.classList.toggle('nav-open', shouldOpen);
     }
   };
