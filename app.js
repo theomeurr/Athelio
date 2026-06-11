@@ -3439,22 +3439,39 @@ function openDailyReview() {
 
 function closeNav() { document.body.classList.remove('nav-open'); }
 
-// Glisser vers la gauche pour fermer le menu mobile (le panneau suit le doigt)
+// Tiroir au doigt : glisser depuis le bord gauche pour l'ouvrir,
+// glisser vers la gauche pour le fermer — le panneau suit le doigt
+// dans les deux sens, la transition CSS termine le mouvement.
 function setupNavSwipe() {
   const sidebar = $('.sidebar');
   const backdrop = $('#nav-backdrop');
   if (!sidebar || !backdrop) return;
 
+  const isMobile = () => window.matchMedia('(max-width: 720px)').matches;
+  const EDGE = 28; // zone de déclenchement au bord gauche (px)
+
   let startX = 0, startY = 0, curX = 0, lastX = 0, lastT = 0, velocity = 0;
-  let tracking = false, dragging = false;
+  let tracking = false, dragging = false, mode = null; // 'open' | 'close'
+
+  // x = translateX du tiroir en px (-largeur = caché, 0 = ouvert)
+  const setDrawer = (x) => {
+    const w = sidebar.offsetWidth;
+    curX = Math.max(-w, Math.min(0, x));
+    sidebar.style.transform = `translateX(${curX}px)`;
+    backdrop.style.opacity = String(Math.max(0, 1 + curX / w));
+  };
 
   const onStart = (e) => {
-    if (!document.body.classList.contains('nav-open')) return;
+    if (!isMobile()) return;
     const t = e.touches[0];
+    const open = document.body.classList.contains('nav-open');
+    if (open) mode = 'close';
+    else if (t.clientX <= EDGE) mode = 'open';
+    else { tracking = false; return; }
     startX = lastX = t.clientX;
     startY = t.clientY;
     lastT = e.timeStamp;
-    curX = 0;
+    curX = open ? 0 : -sidebar.offsetWidth;
     velocity = 0;
     tracking = true;
     dragging = false;
@@ -3468,8 +3485,10 @@ function setupNavSwipe() {
 
     if (!dragging) {
       if (Math.abs(dx) < 10 && Math.abs(dy) < 10) return;
-      // Geste plutôt vertical : on laisse le scroll du menu faire son travail
+      // Geste plutôt vertical : on laisse le scroll faire son travail
       if (Math.abs(dy) > Math.abs(dx)) { tracking = false; return; }
+      // Depuis le bord, seul un glissement vers la droite ouvre
+      if (mode === 'open' && dx < 0) { tracking = false; return; }
       dragging = true;
       sidebar.classList.add('dragging');
       backdrop.classList.add('dragging');
@@ -3477,34 +3496,35 @@ function setupNavSwipe() {
 
     e.preventDefault();
     const dt = e.timeStamp - lastT || 1;
-    velocity = (t.clientX - lastX) / dt; // px/ms — négatif vers la gauche
+    velocity = (t.clientX - lastX) / dt; // px/ms — positif vers la droite
     lastX = t.clientX;
     lastT = e.timeStamp;
 
-    curX = Math.min(0, dx);
-    sidebar.style.transform = `translateX(${curX}px)`;
-    backdrop.style.opacity = String(Math.max(0, 1 + curX / sidebar.offsetWidth));
+    setDrawer((mode === 'close' ? 0 : -sidebar.offsetWidth) + dx);
   };
 
   const onEnd = () => {
     tracking = false;
     if (!dragging) return;
     dragging = false;
-    const shouldClose = -curX > sidebar.offsetWidth * 0.35 || velocity < -0.35;
-    // On relâche le suivi du doigt : la transition CSS termine le mouvement en douceur
+    const w = sidebar.offsetWidth;
+    // On relâche le suivi du doigt : la transition CSS termine le mouvement
     sidebar.classList.remove('dragging');
     backdrop.classList.remove('dragging');
     sidebar.style.transform = '';
     backdrop.style.opacity = '';
-    if (shouldClose) closeNav();
+    if (mode === 'close') {
+      if (-curX > w * 0.35 || velocity < -0.35) closeNav();
+    } else {
+      const shouldOpen = curX > -w * 0.65 || velocity > 0.35;
+      document.body.classList.toggle('nav-open', shouldOpen);
+    }
   };
 
-  [sidebar, backdrop].forEach((elm) => {
-    elm.addEventListener('touchstart', onStart, { passive: true });
-    elm.addEventListener('touchmove', onMove, { passive: false });
-    elm.addEventListener('touchend', onEnd);
-    elm.addEventListener('touchcancel', onEnd);
-  });
+  document.addEventListener('touchstart', onStart, { passive: true });
+  document.addEventListener('touchmove', onMove, { passive: false });
+  document.addEventListener('touchend', onEnd);
+  document.addEventListener('touchcancel', onEnd);
 }
 
 // Splash : reste affiché au moins ~650 ms puis fond en douceur
