@@ -1358,7 +1358,7 @@ views.lifts = () => {
   wrap.appendChild(chartCard);
 
   // Répartition par groupe musculaire (4 dernières semaines)
-  const groupCard = el('div', { class: 'card', style: 'margin-top: 16px;' }, el('h3', {}, 'Groupes travaillés (4 dernières semaines)'));
+  const groupCard = el('div', { class: 'card' }, el('h3', {}, 'Groupes travaillés (4 dernières semaines)'));
   const cutoff = (() => { const d = new Date(); d.setDate(d.getDate() - 28); return d.toISOString().slice(0, 10); })();
   const recent = all.filter(l => l.date >= cutoff);
   const groupCounts = {};
@@ -1374,7 +1374,40 @@ views.lifts = () => {
     )));
     groupCard.appendChild(pills);
   }
-  wrap.appendChild(groupCard);
+
+  // Répartition par salle (4 dernières semaines)
+  const gymCard = el('div', { class: 'card' }, el('h3', {}, 'Salles (4 dernières semaines)'));
+  const gymCounts = {};
+  recent.forEach(l => { if (l.gym) gymCounts[l.gym] = (gymCounts[l.gym] || 0) + 1; });
+  const noGymCount = recent.filter(l => !l.gym).length;
+  const taggedCount = recent.length - noGymCount;
+  if (!taggedCount) {
+    gymCard.appendChild(emptyState('Aucune salle taguée', 'Choisis « On Air » ou « Fitness » en créant une séance pour voir ta répartition.'));
+  } else {
+    gymCard.appendChild(el('div', { class: 'chart-wrap', style: 'height: 170px;' }, el('canvas', { id: 'gym-chart' })));
+    const favKey = Object.entries(gymCounts).sort((a, b) => b[1] - a[1])[0][0];
+    const gymPills = el('div', { class: 'group-pills', style: 'margin-top: 12px; justify-content: center;' });
+    GYMS.forEach(g => {
+      if (!gymCounts[g.key]) return;
+      const pct = Math.round((gymCounts[g.key] / taggedCount) * 100);
+      gymPills.appendChild(el('div', { class: 'group-pill' },
+        el('span', { class: 'group-pill-label' }, `${g.emoji} ${g.label}`),
+        el('span', { class: 'group-pill-count' }, `${gymCounts[g.key]} · ${pct} %`),
+      ));
+    });
+    if (noGymCount) gymPills.appendChild(el('div', { class: 'group-pill' },
+      el('span', { class: 'group-pill-label' }, '🏠 Sans salle'),
+      el('span', { class: 'group-pill-count', style: 'background: var(--panel-2); color: var(--text-dim);' }, String(noGymCount)),
+    ));
+    gymCard.appendChild(gymPills);
+    gymCard.appendChild(el('p', { style: 'margin: 10px 0 0; text-align: center; font-size: 12px; color: var(--text-dim);' },
+      `Salle favorite : ${gymLabel(favKey)} (${gymCounts[favKey]} séance${gymCounts[favKey] > 1 ? 's' : ''} sur ${taggedCount} taguée${taggedCount > 1 ? 's' : ''})`));
+  }
+
+  const statsGrid = el('div', { class: 'grid cols-2', style: 'margin-top: 16px;' });
+  statsGrid.appendChild(groupCard);
+  statsGrid.appendChild(gymCard);
+  wrap.appendChild(statsGrid);
 
   // Historique
   const list = el('div', { class: 'card', style: 'margin-top: 16px;' }, el('h3', {}, 'Historique'));
@@ -1387,7 +1420,7 @@ views.lifts = () => {
           (l.groups || []).map(muscleLabel).join(' · ') || (l.exercise ? l.exercise : '—'),
         ),
         el('div', { class: 'meta' },
-          `${fmtDate(l.date)}${l.focus ? ' · ' + l.focus : ''}${l.notes ? ' · ' + l.notes : ''}`),
+          `${fmtDate(l.date)}${l.gym ? ' · ' + gymLabel(l.gym) : ''}${l.focus ? ' · ' + l.focus : ''}${l.notes ? ' · ' + l.notes : ''}`),
       ),
       el('div', { class: 'actions' },
         el('button', { class: 'icon-btn', onClick: () => openLiftForm(l) }, '✎'),
@@ -1427,14 +1460,65 @@ views.lifts = () => {
         scales: { ...baseScales(), y: { ...baseScales().y, ticks: { stepSize: 1, color: chartTheme.text }, beginAtZero: true } },
       },
     });
+
+    // Doughnut répartition par salle
+    const gymCanvas = $('#gym-chart');
+    if (gymCanvas) {
+      const labels = [], data = [], colors = [];
+      const gymColors = { onair: chartTheme.accent, fitness: chartTheme.info };
+      GYMS.forEach(g => {
+        if (!gymCounts[g.key]) return;
+        labels.push(g.label);
+        data.push(gymCounts[g.key]);
+        colors.push(gymColors[g.key] || chartTheme.success);
+      });
+      chart(gymCanvas.getContext('2d'), {
+        type: 'doughnut',
+        data: { labels, datasets: [{ data, backgroundColor: colors, borderColor: 'transparent' }] },
+        options: {
+          responsive: true, maintainAspectRatio: false, cutout: '62%',
+          plugins: { legend: { position: 'bottom', labels: { color: chartTheme.text } } },
+        },
+      });
+    }
   }, 0);
 
   return wrap;
 };
 
+const GYMS = [
+  { key: 'onair', label: 'On Air', emoji: '🏟️' },
+  { key: 'fitness', label: 'Fitness', emoji: '🏢' },
+];
+
+function gymLabel(k) {
+  const g = GYMS.find(x => x.key === k);
+  return g ? `${g.emoji} ${g.label}` : k;
+}
+
+// Sélecteur de salle : un seul choix, re-cliquer désélectionne
+function gymPicker(initial) {
+  let selected = initial || null;
+  const wrap = el('div', { class: 'gym-picker' });
+  GYMS.forEach(g => {
+    const btn = el('button', {
+      type: 'button',
+      class: `gym-btn${selected === g.key ? ' active' : ''}`,
+      onClick: () => {
+        selected = selected === g.key ? null : g.key;
+        wrap.querySelectorAll('.gym-btn').forEach(b => b.classList.remove('active'));
+        if (selected === g.key) btn.classList.add('active');
+      },
+    }, `${g.emoji} ${g.label}`);
+    wrap.appendChild(btn);
+  });
+  return { el: wrap, get value() { return selected; } };
+}
+
 function openLiftForm(existing) {
-  const l = existing || { date: today(), groups: [], focus: '', notes: '' };
+  const l = existing || { date: today(), groups: [], focus: '', notes: '', gym: null };
   let selectedGroups = new Set(l.groups || []);
+  const gym = gymPicker(l.gym);
 
   openModal(existing ? 'Modifier la séance' : 'Nouvelle séance', (close) => {
     const form = el('form', { class: 'form', onSubmit: (e) => {
@@ -1445,6 +1529,7 @@ function openLiftForm(existing) {
         id: existing?.id || id(),
         date: d.date,
         groups: Array.from(selectedGroups),
+        gym: gym.value,
         focus: (d.focus || '').trim(),
         notes: (d.notes || '').trim(),
       };
@@ -1476,6 +1561,11 @@ function openLiftForm(existing) {
       grid.appendChild(btn);
     });
     form.appendChild(groupsField);
+
+    form.appendChild(el('div', {},
+      el('label', {}, 'Salle (facultatif)'),
+      gym.el,
+    ));
 
     form.appendChild(el('div', {},
       el('label', {}, 'Focus de la séance (facultatif)'),
@@ -3191,14 +3281,16 @@ function reviewSteps(ctx) {
         } }, el('span', { class: 'muscle-emoji' }, g.emoji), el('span', {}, g.label));
         grid.appendChild(btn);
       });
+      const gym = gymPicker(null);
       const focus = el('input', { type: 'text', placeholder: 'Ex : Force / Hypertrophie' });
       const box = el('div', { class: 'form' },
         grid,
-        el('div', { style: 'margin-top: 4px;' }, el('label', {}, 'Focus (facultatif)'), focus),
+        el('div', { style: 'margin-top: 4px;' }, el('label', {}, 'Salle (facultatif)'), gym.el),
+        el('div', {}, el('label', {}, 'Focus (facultatif)'), focus),
       );
       return { el: box, save() {
         if (!selected.size) { toast('Sélectionne au moins un groupe — ou clique sur Passer.'); return false; }
-        state.lifts.push({ id: id(), date: t, groups: Array.from(selected), focus: focus.value.trim(), notes: '' });
+        state.lifts.push({ id: id(), date: t, groups: Array.from(selected), gym: gym.value, focus: focus.value.trim(), notes: '' });
         save(); return true;
       } };
     },
@@ -3221,56 +3313,7 @@ function reviewSteps(ctx) {
     },
   });
 
-  // 📏 Mensurations
-  if (!state.measurements.some(m => m.date === t)) steps.push({
-    emoji: '📏', title: 'Mensurations', question: 'Jour de mesures ? (1×/mois suffit)',
-    build() {
-      const mk = () => el('input', { type: 'number', step: '0.5', min: '0' });
-      const chest = mk(), arm = mk(), waist = mk(), thigh = mk();
-      const box = el('div', { class: 'form' },
-        el('div', { class: 'form-row' },
-          el('div', {}, el('label', {}, 'Poitrine (cm)'), chest),
-          el('div', {}, el('label', {}, 'Bras (cm)'), arm),
-        ),
-        el('div', { class: 'form-row' },
-          el('div', {}, el('label', {}, 'Taille (cm)'), waist),
-          el('div', {}, el('label', {}, 'Cuisse (cm)'), thigh),
-        ),
-      );
-      return { el: box, save() {
-        const vals = [chest, arm, waist, thigh].map(i => i.value ? +i.value : null);
-        if (vals.every(v => v == null)) { toast('Entre au moins une mesure — ou clique sur Passer.'); return false; }
-        state.measurements.push({ id: id(), date: t, chest: vals[0], arm: vals[1], waist: vals[2], thigh: vals[3] });
-        save(); return true;
-      } };
-    },
-  });
-
-  // 📷 Photo
-  if (!state.photos.some(p => p.date === t)) steps.push({
-    emoji: '📷', title: 'Photo', question: 'Une photo de progression aujourd\'hui ?',
-    build() {
-      let file = null;
-      const label = el('input', { type: 'text', placeholder: 'Légende (facultatif)' });
-      const fileBtn = el('label', { class: 'btn secondary', style: 'display: block; text-align: center; cursor: pointer;' },
-        '📷 Choisir une photo',
-        el('input', { type: 'file', accept: 'image/*', hidden: '', onChange: (e) => {
-          file = e.target.files[0] || null;
-          fileBtn.firstChild.textContent = file ? `📦 ${file.name}` : '📷 Choisir une photo';
-        } }),
-      );
-      const box = el('div', { class: 'form' }, fileBtn, el('div', {}, el('label', {}, 'Légende'), label));
-      return { el: box, async save() {
-        if (!file) { toast('Choisis une photo — ou clique sur Passer.'); return false; }
-        try {
-          const data = await compressImage(file);
-          state.photos.push({ id: id(), date: t, label: label.value.trim(), data });
-          if (!save()) { state.photos.pop(); return false; }
-          return true;
-        } catch { toast('Impossible de charger cette image.'); return false; }
-      } };
-    },
-  });
+  // 📏 Mensurations et 📷 Photo : exclus de la review (rythme mensuel / ponctuel)
 
   // 🧘 AntiFragile (mobilité)
   if (!state.mobility.some(m => m.date === t)) steps.push({
