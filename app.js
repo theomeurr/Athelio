@@ -2911,7 +2911,11 @@ function showLockScreen() {
     const err = $('#lock-err');
     const submit = async () => {
       const ok = await checkPin(input.value);
-      if (ok) { overlay.remove(); resolve(); }
+      if (ok) {
+        // Zoom-out fondu de l'écran PIN, puis l'app se révèle dessous
+        overlay.classList.add('unlocking');
+        setTimeout(() => { overlay.remove(); resolve(); }, 380);
+      }
       else { err.textContent = 'Code incorrect.'; input.value = ''; input.focus(); }
     };
     $('#lock-submit').addEventListener('click', submit);
@@ -3503,12 +3507,33 @@ function setupNavSwipe() {
   });
 }
 
+// Splash : reste affiché au moins ~650 ms puis fond en douceur
+// (révèle l'écran PIN ou l'app qui attend dessous)
+function hideSplash() {
+  const splash = $('#splash');
+  if (!splash) return;
+  setTimeout(() => {
+    splash.classList.add('hide');
+    setTimeout(() => splash.remove(), 500);
+  }, 650);
+}
+
+// Animation d'entrée : topbar descend, contenu monte, sidebar glisse (desktop)
+function playAppIntro() {
+  document.body.classList.add('app-intro');
+  setTimeout(() => document.body.classList.remove('app-intro'), 1000);
+}
+
 document.addEventListener('DOMContentLoaded', async () => {
-  // 1) Verrou PIN si configuré
+  // 1) Verrou PIN si configuré — l'écran PIN se révèle sous le splash
   if (getPinConfig()) {
     document.body.classList.add('locked');
-    await showLockScreen();
+    const unlocked = showLockScreen();
+    hideSplash();
+    await unlocked;
     document.body.classList.remove('locked');
+  } else {
+    hideSplash();
   }
 
   // 2) Demande au navigateur de ne pas évincer notre stockage (vidéos lourdes !)
@@ -3531,6 +3556,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   setupNavSwipe();
 
   navigate('dashboard');
+  playAppIntro();
 
   // 3) Auto-snapshot quotidien + rappel d'export tous les 14 jours
   maybeAutoSnapshot();
