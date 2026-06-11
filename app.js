@@ -1387,7 +1387,7 @@ views.lifts = () => {
           (l.groups || []).map(muscleLabel).join(' · ') || (l.exercise ? l.exercise : '—'),
         ),
         el('div', { class: 'meta' },
-          `${fmtDate(l.date)}${l.focus ? ' · ' + l.focus : ''}${l.notes ? ' · ' + l.notes : ''}`),
+          `${fmtDate(l.date)}${l.gym ? ' · ' + gymLabel(l.gym) : ''}${l.focus ? ' · ' + l.focus : ''}${l.notes ? ' · ' + l.notes : ''}`),
       ),
       el('div', { class: 'actions' },
         el('button', { class: 'icon-btn', onClick: () => openLiftForm(l) }, '✎'),
@@ -1432,9 +1432,39 @@ views.lifts = () => {
   return wrap;
 };
 
+const GYMS = [
+  { key: 'onair', label: 'On Air', emoji: '🏟️' },
+  { key: 'fitness', label: 'Fitness', emoji: '🏢' },
+];
+
+function gymLabel(k) {
+  const g = GYMS.find(x => x.key === k);
+  return g ? `${g.emoji} ${g.label}` : k;
+}
+
+// Sélecteur de salle : un seul choix, re-cliquer désélectionne
+function gymPicker(initial) {
+  let selected = initial || null;
+  const wrap = el('div', { class: 'gym-picker' });
+  GYMS.forEach(g => {
+    const btn = el('button', {
+      type: 'button',
+      class: `gym-btn${selected === g.key ? ' active' : ''}`,
+      onClick: () => {
+        selected = selected === g.key ? null : g.key;
+        wrap.querySelectorAll('.gym-btn').forEach(b => b.classList.remove('active'));
+        if (selected === g.key) btn.classList.add('active');
+      },
+    }, `${g.emoji} ${g.label}`);
+    wrap.appendChild(btn);
+  });
+  return { el: wrap, get value() { return selected; } };
+}
+
 function openLiftForm(existing) {
-  const l = existing || { date: today(), groups: [], focus: '', notes: '' };
+  const l = existing || { date: today(), groups: [], focus: '', notes: '', gym: null };
   let selectedGroups = new Set(l.groups || []);
+  const gym = gymPicker(l.gym);
 
   openModal(existing ? 'Modifier la séance' : 'Nouvelle séance', (close) => {
     const form = el('form', { class: 'form', onSubmit: (e) => {
@@ -1445,6 +1475,7 @@ function openLiftForm(existing) {
         id: existing?.id || id(),
         date: d.date,
         groups: Array.from(selectedGroups),
+        gym: gym.value,
         focus: (d.focus || '').trim(),
         notes: (d.notes || '').trim(),
       };
@@ -1476,6 +1507,11 @@ function openLiftForm(existing) {
       grid.appendChild(btn);
     });
     form.appendChild(groupsField);
+
+    form.appendChild(el('div', {},
+      el('label', {}, 'Salle (facultatif)'),
+      gym.el,
+    ));
 
     form.appendChild(el('div', {},
       el('label', {}, 'Focus de la séance (facultatif)'),
@@ -3191,14 +3227,16 @@ function reviewSteps(ctx) {
         } }, el('span', { class: 'muscle-emoji' }, g.emoji), el('span', {}, g.label));
         grid.appendChild(btn);
       });
+      const gym = gymPicker(null);
       const focus = el('input', { type: 'text', placeholder: 'Ex : Force / Hypertrophie' });
       const box = el('div', { class: 'form' },
         grid,
-        el('div', { style: 'margin-top: 4px;' }, el('label', {}, 'Focus (facultatif)'), focus),
+        el('div', { style: 'margin-top: 4px;' }, el('label', {}, 'Salle (facultatif)'), gym.el),
+        el('div', {}, el('label', {}, 'Focus (facultatif)'), focus),
       );
       return { el: box, save() {
         if (!selected.size) { toast('Sélectionne au moins un groupe — ou clique sur Passer.'); return false; }
-        state.lifts.push({ id: id(), date: t, groups: Array.from(selected), focus: focus.value.trim(), notes: '' });
+        state.lifts.push({ id: id(), date: t, groups: Array.from(selected), gym: gym.value, focus: focus.value.trim(), notes: '' });
         save(); return true;
       } };
     },

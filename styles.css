@@ -836,6 +836,30 @@ body.locked { overflow: hidden; }
 }
 .muscle-emoji { font-size: 22px; line-height: 1; }
 
+/* Sélecteur de salle (muscu) */
+.gym-picker {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.gym-btn {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  padding: 10px;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: 0.15s;
+}
+.gym-btn:hover { border-color: var(--accent); color: var(--text); }
+.gym-btn.active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
 /* Pills de répartition par groupe */
 .group-pills {
   display: flex;
