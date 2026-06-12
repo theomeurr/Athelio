@@ -2041,18 +2041,18 @@ function parseVideo(url) {
   return { type: 'link', src: url };
 }
 
-// Génère une miniature JPEG (dataURL) à partir d'un fichier vidéo local.
-// Capture une frame vers 1 s (ou mi-durée si plus court), redimensionnée à 480px.
+// Génère une miniature JPEG (dataURL) + ratio largeur/hauteur à partir d'un
+// fichier vidéo local. Capture une frame vers 1 s (ou mi-durée si plus court).
 function makeVideoThumb(file, { width = 480 } = {}) {
   return new Promise((resolve) => {
     let settled = false;
     const url = URL.createObjectURL(file);
     const video = document.createElement('video');
-    const done = (thumb) => {
+    const done = (result) => {
       if (settled) return;
       settled = true;
       URL.revokeObjectURL(url);
-      resolve(thumb);
+      resolve(result);
     };
     video.muted = true;
     video.playsInline = true;
@@ -2068,7 +2068,7 @@ function makeVideoThumb(file, { width = 480 } = {}) {
         canvas.width = width;
         canvas.height = Math.round(width * ratio);
         canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
-        done(canvas.toDataURL('image/jpeg', 0.72));
+        done({ dataUrl: canvas.toDataURL('image/jpeg', 0.72), ratio: video.videoWidth / video.videoHeight || 16 / 9 });
       } catch { done(null); }
     };
     video.src = url;
@@ -2076,10 +2076,31 @@ function makeVideoThumb(file, { width = 480 } = {}) {
   });
 }
 
+// Capture la frame actuelle d'un élément <video> en miniature JPEG
+function captureVideoFrame(video, width = 480) {
+  const ratio = video.videoHeight && video.videoWidth ? video.videoHeight / video.videoWidth : 9 / 16;
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = Math.round(width * ratio);
+  canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
+  return { dataUrl: canvas.toDataURL('image/jpeg', 0.72), ratio: video.videoWidth / video.videoHeight || 16 / 9 };
+}
+
+// Adapte le format de la carte au format réel de la vidéo (16:9, vertical…)
+function adaptEmbedRatio(video, v) {
+  video.addEventListener('loadedmetadata', () => {
+    const r = video.videoWidth / video.videoHeight;
+    if (!r || !isFinite(r)) return;
+    if (video.parentElement) video.parentElement.style.aspectRatio = String(r);
+    if (v && !v.ratio) v.ratio = r; // mémorisé, persisté au prochain save()
+  });
+}
+
 function videoEmbed(v) {
   // Vidéo fichier dans IndexedDB : on insère un placeholder puis on injecte la vraie src
   if (v.blobKey) {
     const video = el('video', { controls: '', preload: 'metadata', poster: v.thumb || null });
+    adaptEmbedRatio(video, v);
     getVideoBlobUrl(v.blobKey).then((url) => {
       if (url) video.src = url;
       else video.replaceWith(el('div', { class: 'video-fallback' }, 'Vidéo introuvable (cache vidé ?)'));
@@ -2093,7 +2114,9 @@ function videoEmbed(v) {
       allowfullscreen: '' });
   }
   if (p.type === 'file') {
-    return el('video', { src: p.src, controls: '', preload: 'metadata' });
+    const video = el('video', { src: p.src, controls: '', preload: 'metadata' });
+    adaptEmbedRatio(video, v);
+    return video;
   }
   if (p.type === 'link') {
     return el('a', { class: 'video-fallback', href: p.src, target: '_blank', rel: 'noopener' }, '▶ Ouvrir la vidéo');
@@ -2153,7 +2176,7 @@ function videoCard(v, opts = {}) {
   const stateKey = opts.stateKey || 'videos';
   const navView = opts.navView || 'videos';
   return el('div', { class: 'video-card' },
-    el('div', { class: 'video-embed' }, videoEmbed(v)),
+    el('div', { class: 'video-embed', style: v.ratio ? `aspect-ratio: ${v.ratio};` : null }, videoEmbed(v)),
     el('div', { class: 'video-info' },
       el('div', { class: 'video-head' },
         el('div', {},
@@ -2186,6 +2209,7 @@ function openVideoForm(opts = {}) {
   openModal(existing ? 'Modifier la vidéo' : 'Ajouter une vidéo', (close) => {
     let pendingFile = null;
     let pendingThumb = null;
+    let pendingRatio = null;
     let currentTags = new Set(existing?.tags || []);
 
     const form = el('form', { class: 'form', onSubmit: async (e) => {
@@ -2199,6 +2223,8 @@ function openVideoForm(opts = {}) {
           date: d.date, title: (d.title || '').trim(),
           url: url || existing.url || '',
           notes: (d.notes || '').trim(), tags };
+        if (pendingThumb) updated.thumb = pendingThumb;
+        if (pendingRatio) updated.ratio = pendingRatio;
         state[stateKey] = state[stateKey].map(x => x.id === existing.id ? updated : x);
         if (!save()) return;
         close(); navigate(navView); toast('Vidéo mise à jour'); return;
@@ -2212,6 +2238,7 @@ function openVideoForm(opts = {}) {
           entry.size = pendingFile.size;
           entry.mime = pendingFile.type;
           if (pendingThumb) entry.thumb = pendingThumb;
+          if (pendingRatio) entry.ratio = pendingRatio;
         } catch (err) {
           toast('Stockage refusé par le navigateur : ' + (err?.message || err));
           return;
@@ -2234,7 +2261,7 @@ function openVideoForm(opts = {}) {
         <div><label>Date</label><input type="date" name="date" value="${dateVal}" required></div>
         <div><label>Titre</label><input type="text" name="title" value="${titleVal.replace(/"/g, '&quot;')}" placeholder="ex : Service revers, semaine 3"></div>
       </div>
-      ${existing ? '' : `
+      ${existing ? '<div data-role="thumb-edit"></div>' : `
         <div><label>Lien vidéo</label><input type="url" name="url" value="${urlVal.replace(/"/g, '&quot;')}" placeholder="https://youtube.com/… ou Vimeo, Drive…"></div>
         <div><label>… ou importer un fichier vidéo</label><input type="file" accept="video/*" name="file"></div>
         <p class="form-hint file-hint">Stockage local jusqu'à ~500 Mo par fichier. Au-delà, préfère un lien (YouTube, Vimeo, Drive).</p>
@@ -2304,13 +2331,59 @@ function openVideoForm(opts = {}) {
       }
       pendingFile = f;
       hint.textContent = `📦 ${f.name} — ${(f.size / 1_000_000).toFixed(1)} Mo, sera stocké dans IndexedDB (hors-ligne).`;
-      makeVideoThumb(f).then((thumb) => {
-        if (pendingFile !== f || !thumb) return; // fichier changé entre-temps ou capture impossible
-        pendingThumb = thumb;
-        preview.src = thumb;
+      makeVideoThumb(f).then((result) => {
+        if (pendingFile !== f || !result) return; // fichier changé entre-temps ou capture impossible
+        pendingThumb = result.dataUrl;
+        pendingRatio = result.ratio;
+        preview.src = result.dataUrl;
         preview.hidden = false;
       });
     });
+
+    // Édition d'une vidéo locale : choisir le moment de la miniature au curseur
+    const thumbEditBox = form.querySelector('[data-role="thumb-edit"]');
+    if (thumbEditBox && existing?.blobKey) {
+      const scrubVideo = el('video', { class: 'thumb-scrub-video', muted: '', playsinline: '', preload: 'metadata' });
+      const range = el('input', { type: 'range', class: 'thumb-scrub', min: '0', max: '0', step: '0.1', value: '0' });
+      const timeLabel = el('span', { class: 'thumb-scrub-time' }, '0:00');
+      const capBtn = el('button', { type: 'button', class: 'btn secondary small' }, '📸 Utiliser cette image comme miniature');
+      const curThumb = el('img', { class: 'video-thumb-preview', alt: 'Miniature actuelle' });
+      if (existing.thumb) curThumb.src = existing.thumb; else curThumb.hidden = true;
+
+      const fmtTime = (s) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
+      scrubVideo.addEventListener('loadedmetadata', () => {
+        range.max = String(scrubVideo.duration || 0);
+        scrubVideo.currentTime = Math.min(1, (scrubVideo.duration || 2) / 2);
+      });
+      scrubVideo.addEventListener('timeupdate', () => {
+        timeLabel.textContent = fmtTime(scrubVideo.currentTime);
+        range.value = String(scrubVideo.currentTime);
+      });
+      range.addEventListener('input', () => {
+        scrubVideo.currentTime = +range.value;
+        timeLabel.textContent = fmtTime(+range.value);
+      });
+      capBtn.addEventListener('click', () => {
+        try {
+          const { dataUrl, ratio } = captureVideoFrame(scrubVideo);
+          pendingThumb = dataUrl;
+          pendingRatio = ratio;
+          curThumb.src = dataUrl;
+          curThumb.hidden = false;
+          toast('Miniature capturée — clique sur Enregistrer pour valider');
+        } catch { toast('Capture impossible sur cette vidéo.'); }
+      });
+      getVideoBlobUrl(existing.blobKey).then((u) => {
+        if (!u) { thumbEditBox.remove(); return; }
+        scrubVideo.src = u;
+        thumbEditBox.appendChild(el('label', {}, 'Miniature — choisis le moment avec le curseur'));
+        thumbEditBox.appendChild(scrubVideo);
+        thumbEditBox.appendChild(el('div', { class: 'thumb-scrub-row' }, range, timeLabel));
+        thumbEditBox.appendChild(capBtn);
+        thumbEditBox.appendChild(curThumb);
+      });
+    }
+
     form.querySelector('button[type=button]').onclick = close;
     return form;
   });

@@ -1123,7 +1123,8 @@ body.locked { overflow: hidden; }
 .video-embed {
   position: relative;
   width: 100%;
-  aspect-ratio: 16 / 9;
+  aspect-ratio: 16 / 9; /* défaut — remplacé par le ratio réel de la vidéo */
+  max-height: 560px;    /* garde les vidéos verticales à une taille raisonnable */
   background: #000;
 }
 .video-embed iframe,
@@ -1369,6 +1370,34 @@ body.locked { overflow: hidden; }
 }
 .slider-tag-before { left: 10px; }
 .slider-tag-after { right: 10px; color: var(--accent); }
+
+/* Choix du moment de la miniature (édition d'une vidéo locale) */
+.thumb-scrub-video {
+  width: 100%;
+  max-height: 240px;
+  background: #000;
+  border-radius: var(--radius-sm);
+  display: block;
+}
+.thumb-scrub-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 8px 0;
+}
+.thumb-scrub {
+  flex: 1;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+.thumb-scrub-time {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+  min-width: 36px;
+  text-align: right;
+}
 
 /* Aperçu miniature dans le formulaire d'import vidéo */
 .video-thumb-preview {
