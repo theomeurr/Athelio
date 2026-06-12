@@ -635,6 +635,85 @@ body.locked { overflow: hidden; }
   max-width: 320px;
 }
 @keyframes slide-in { from { transform: translateX(20px); opacity: 0; } to { transform: none; opacity: 1; } }
+.toast-undo {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+.toast-undo-btn {
+  background: transparent;
+  border: none;
+  color: var(--accent);
+  font-weight: 700;
+  font-size: 13px;
+  cursor: pointer;
+  white-space: nowrap;
+  padding: 2px 4px;
+}
+.toast-undo-btn:hover { text-decoration: underline; }
+
+/* Récap du mois (dashboard) */
+.recap-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(90px, 1fr));
+  gap: 10px;
+}
+.recap-item {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 12px 8px;
+  text-align: center;
+}
+.recap-emoji { font-size: 20px; line-height: 1; }
+.recap-val { font-size: 20px; font-weight: 800; letter-spacing: -0.5px; margin-top: 4px; }
+.recap-label { font-size: 11px; color: var(--text-dim); margin-top: 2px; }
+
+/* Heatmap d'activité (dashboard) */
+.heatmap-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; padding-bottom: 4px; }
+.heatmap { display: flex; gap: 3px; min-width: min-content; }
+.heatmap-col { display: flex; flex-direction: column; gap: 3px; }
+.heatmap-cell {
+  width: 13px;
+  height: 13px;
+  border-radius: 3px;
+  background: var(--bg);
+  flex: 0 0 auto;
+}
+.heatmap-cell.lvl-0 { background: rgba(255, 255, 255, 0.05); }
+.heatmap-cell.lvl-1 { background: rgba(240, 163, 95, 0.32); }
+.heatmap-cell.lvl-2 { background: rgba(240, 163, 95, 0.55); }
+.heatmap-cell.lvl-3 { background: rgba(240, 163, 95, 0.78); }
+.heatmap-cell.lvl-4 { background: var(--accent); }
+.heatmap-cell.lvl-future { background: transparent; }
+.heatmap-legend {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 10px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.heatmap-legend .heatmap-cell { width: 11px; height: 11px; }
+
+/* Config de la Review du jour (paramètres) */
+.review-config { display: flex; flex-direction: column; gap: 6px; }
+.review-config-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+}
+.review-config-row.off { opacity: 0.55; }
+.review-config-arrows { display: flex; flex-direction: column; gap: 1px; }
+.review-config-arrows .icon-btn { padding: 0 4px; font-size: 10px; line-height: 1.1; }
+.review-config-arrows .icon-btn:disabled { opacity: 0.25; cursor: default; }
+.review-config-label { flex: 1; font-size: 14px; font-weight: 600; }
 
 /* Chart wrapper */
 .chart-wrap {

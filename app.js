@@ -18,7 +18,7 @@ const defaultState = {
   mobilityVideos: [],
   sobriety: [],
   comparisons: [],
-  settings: { liftWeeklyTarget: 3 },
+  settings: { liftWeeklyTarget: 3, haptics: true, reviewConfig: null },
 };
 
 let state = load();
@@ -581,6 +581,11 @@ function shortDate(s) {
 
 function today() { return new Date().toISOString().slice(0, 10); }
 
+// YYYY-MM-DD à partir d'un objet Date (composantes locales)
+function ymd(d) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
 function dateDiffDays(a, b) { return Math.round((new Date(a) - new Date(b)) / 86400000); }
 
 // Jours sans écart : nombre de jours depuis le dernier écart (ou depuis le 1er suivi)
@@ -613,6 +618,53 @@ function toast(msg) {
   const t = el('div', { class: 'toast' }, msg);
   $('#toast-root').appendChild(t);
   setTimeout(() => t.remove(), 2400);
+}
+
+// Toast avec bouton « Annuler » (~6 s). onExpire() est appelé si la fenêtre
+// d'annulation se ferme sans annuler (utile pour finaliser une suppression de blob).
+function toastUndo(msg, onUndo, onExpire) {
+  let settled = false;
+  const t = el('div', { class: 'toast toast-undo' },
+    el('span', {}, msg),
+    el('button', { class: 'toast-undo-btn', onClick: () => {
+      if (settled) return; settled = true;
+      clearTimeout(timer); t.remove();
+      onUndo();
+    } }, '↩ Annuler'),
+  );
+  $('#toast-root').appendChild(t);
+  const timer = setTimeout(() => {
+    if (settled) return; settled = true;
+    t.remove();
+    if (onExpire) onExpire();
+  }, 6000);
+}
+
+// Suppression réversible : retire l'élément, sauvegarde, propose d'annuler.
+// opts.removeBlobKey : clé IndexedDB d'un blob à supprimer seulement après expiration.
+function deleteWithUndo({ arr, item, label, navView, removeBlobKey }) {
+  const idx = arr.indexOf(item);
+  if (idx === -1) return;
+  arr.splice(idx, 1);
+  save();
+  if (navView) navigate(navView);
+  toastUndo(
+    `${label} supprimé`,
+    () => { // annuler
+      arr.splice(Math.min(idx, arr.length), 0, item);
+      save();
+      if (navView) navigate(navView);
+    },
+    () => { // expiré : on finalise (blob vidéo, etc.)
+      if (removeBlobKey) idbDel(STORE_BLOBS, removeBlobKey).catch(() => {});
+    },
+  );
+}
+
+// Retour haptique léger (mobile). Réglable dans les paramètres.
+function haptic(ms = 10) {
+  if (state.settings?.haptics === false) return;
+  try { navigator.vibrate?.(ms); } catch {}
 }
 
 function openModal(title, contentFactory) {
@@ -701,6 +753,107 @@ const views = {};
 
 // ---------- Dashboard ----------
 
+// Récap automatique du mois en cours, toutes disciplines confondues
+function monthlyRecapCard() {
+  const now = new Date();
+  const monthStart = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
+  const inMonth = (d) => d >= monthStart;
+  const monthName = now.toLocaleDateString('fr-FR', { month: 'long' });
+
+  const lifts = state.lifts.filter(l => inMonth(l.date)).length;
+  const runs = state.runs.filter(r => inMonth(r.date));
+  const km = runs.reduce((s, r) => s + (r.distance || 0), 0);
+  const matches = state.badminton.matches.filter(m => inMonth(m.date));
+  const wins = matches.filter(m => m.result === 'win').length;
+  const sob = state.sobriety.filter(s => inMonth(s.date));
+  const cleanDays = sob.filter(s => !s.hasSlip).length;
+  const mobility = state.mobility.filter(m => inMonth(m.date)).length;
+
+  // Delta de poids sur le mois (première vs dernière pesée du mois)
+  const wMonth = state.weight.filter(w => inMonth(w.date));
+  let weightTxt = null;
+  if (wMonth.length >= 2) {
+    const delta = +(wMonth.at(-1).value - wMonth[0].value).toFixed(1);
+    weightTxt = `${delta > 0 ? '+' : ''}${delta} kg`;
+  } else if (wMonth.length === 1) {
+    weightTxt = `${wMonth[0].value} kg`;
+  }
+
+  const card = el('div', { class: 'card' });
+  card.appendChild(el('h3', {}, `📅 Ce mois — ${monthName}`));
+  const items = [
+    ['🏋️', lifts, lifts > 1 ? 'séances' : 'séance'],
+    ['🏃', km.toFixed(1), 'km courus'],
+    ['🏸', `${matches.length}`, matches.length ? `${wins}V-${matches.length - wins}D` : 'match'],
+    ['🥗', cleanDays, cleanDays > 1 ? 'jours sains' : 'jour sain'],
+    ['🧘', mobility, 'mobilité'],
+  ];
+  if (weightTxt) items.push(['⚖️', weightTxt, 'poids']);
+
+  const grid = el('div', { class: 'recap-grid' });
+  items.forEach(([emoji, val, label]) => grid.appendChild(el('div', { class: 'recap-item' },
+    el('div', { class: 'recap-emoji' }, emoji),
+    el('div', { class: 'recap-val' }, String(val)),
+    el('div', { class: 'recap-label' }, label),
+  )));
+  card.appendChild(grid);
+  return card;
+}
+
+// Heatmap d'activité (style GitHub) : un carré par jour, intensité = nb d'activités
+function activityHeatmapCard() {
+  const counts = {};
+  const bump = (d) => { if (d) counts[d] = (counts[d] || 0) + 1; };
+  state.lifts.forEach(x => bump(x.date));
+  state.runs.forEach(x => bump(x.date));
+  state.badminton.matches.forEach(x => bump(x.date));
+  state.mobility.forEach(x => bump(x.date));
+  state.weight.forEach(x => bump(x.date));
+  state.recovery.forEach(x => bump(x.date));
+  state.sobriety.forEach(x => { if (!x.hasSlip) bump(x.date); });
+
+  const card = el('div', { class: 'card' });
+  card.appendChild(el('h3', {}, '🔥 Activité'));
+
+  // Fenêtre : ~26 semaines sur mobile, ~52 sur desktop
+  const weeks = window.matchMedia('(max-width: 720px)').matches ? 26 : 53;
+  const today0 = new Date(); today0.setHours(0, 0, 0, 0);
+  // On part du dimanche de la semaine en cours et on recule
+  const end = new Date(today0);
+  end.setDate(end.getDate() + (6 - ((end.getDay() + 6) % 7))); // fin de semaine ISO (dimanche)
+  const start = new Date(end);
+  start.setDate(start.getDate() - (weeks * 7 - 1));
+
+  const grid = el('div', { class: 'heatmap' });
+  let activeDays = 0;
+  for (let w = 0; w < weeks; w++) {
+    const col = el('div', { class: 'heatmap-col' });
+    for (let d = 0; d < 7; d++) {
+      const day = new Date(start);
+      day.setDate(start.getDate() + w * 7 + d);
+      const ds = ymd(day);
+      const n = counts[ds] || 0;
+      if (n) activeDays++;
+      const future = day > today0;
+      const level = future ? 'future' : n === 0 ? '0' : n === 1 ? '1' : n === 2 ? '2' : n === 3 ? '3' : '4';
+      col.appendChild(el('div', { class: `heatmap-cell lvl-${level}`,
+        title: future ? '' : `${fmtDate(ds)} — ${n} activité${n > 1 ? 's' : ''}` }));
+    }
+    grid.appendChild(col);
+  }
+
+  card.appendChild(el('div', { class: 'heatmap-scroll' }, grid));
+  card.appendChild(el('div', { class: 'heatmap-legend' },
+    el('span', {}, `${activeDays} jours actifs`),
+    el('div', { style: 'display: flex; align-items: center; gap: 4px;' },
+      el('span', { style: 'font-size: 11px; color: var(--text-dim);' }, 'moins'),
+      ...['0', '1', '2', '3', '4'].map(l => el('div', { class: `heatmap-cell lvl-${l}` })),
+      el('span', { style: 'font-size: 11px; color: var(--text-dim);' }, 'plus'),
+    ),
+  ));
+  return card;
+}
+
 views.dashboard = () => {
   const wrap = el('div');
   wrap.appendChild(el('div', { class: 'view-header' },
@@ -739,6 +892,14 @@ views.dashboard = () => {
     tStreak >= 3 ? 'belle régularité' : (tStreak ? 'jours d\'affilée' : 'bouge aujourd\'hui')));
   wrap.appendChild(streaks);
 
+  wrap.appendChild(el('div', { style: 'height: 16px;' }));
+
+  // Récap du mois en cours
+  wrap.appendChild(monthlyRecapCard());
+  wrap.appendChild(el('div', { style: 'height: 16px;' }));
+
+  // Heatmap d'activité (toutes disciplines confondues)
+  wrap.appendChild(activityHeatmapCard());
   wrap.appendChild(el('div', { style: 'height: 16px;' }));
 
   const charts = el('div', { class: 'grid cols-2' });
@@ -934,10 +1095,8 @@ views.badminton = () => {
           el('td', { style: 'text-align: right; white-space: nowrap;' },
             toggle,
             el('button', { class: 'icon-btn', onClick: () => openMatchForm(m) }, '✎'),
-            el('button', { class: 'icon-btn danger', onClick: () => confirmAction('Supprimer ce match ?', () => {
-              state.badminton.matches = state.badminton.matches.filter(x => x.id !== m.id);
-              save(); navigate('badminton'); toast('Match supprimé');
-            }) }, '✕'),
+            el('button', { class: 'icon-btn danger', onClick: () =>
+              deleteWithUndo({ arr: state.badminton.matches, item: m, label: 'Match', navView: 'badminton' }) }, '✕'),
           ),
         ));
         tbody.appendChild(detailRow);
@@ -959,10 +1118,8 @@ views.badminton = () => {
         ),
         el('div', { class: 'actions' },
           el('button', { class: 'icon-btn', onClick: () => openTournamentForm(t) }, '✎'),
-          el('button', { class: 'icon-btn danger', onClick: () => confirmAction('Supprimer ce tournoi ?', () => {
-            state.badminton.tournaments = state.badminton.tournaments.filter(x => x.id !== t.id);
-            save(); navigate('badminton'); toast('Tournoi supprimé');
-          }) }, '✕'),
+          el('button', { class: 'icon-btn danger', onClick: () =>
+            deleteWithUndo({ arr: state.badminton.tournaments, item: t, label: 'Tournoi', navView: 'badminton' }) }, '✕'),
         ),
       )));
     }
@@ -1188,10 +1345,8 @@ views.weight = () => {
   if (!arr.length) listCard.appendChild(emptyState('Aucune pesée', 'Ajoute ta première pesée.'));
   arr.forEach(w => listCard.appendChild(el('div', { class: 'list-item' },
     el('div', {}, el('div', { class: 'title' }, `${w.value} kg`), el('div', { class: 'meta' }, fmtDate(w.date))),
-    el('button', { class: 'icon-btn danger', onClick: () => {
-      state.weight = state.weight.filter(x => x.id !== w.id);
-      save(); navigate('weight'); toast('Entrée supprimée');
-    } }, '✕'),
+    el('button', { class: 'icon-btn danger', onClick: () =>
+      deleteWithUndo({ arr: state.weight, item: w, label: 'Pesée', navView: 'weight' }) }, '✕'),
   )));
   wrap.appendChild(listCard);
 
@@ -1233,10 +1388,8 @@ views.runs = () => {
         el('div', { class: 'title' }, `${r.distance} km en ${r.duration} min`),
         el('div', { class: 'meta' }, `${fmtDate(r.date)} · allure ${pace} min/km${r.notes ? ' · ' + r.notes : ''}`),
       ),
-      el('button', { class: 'icon-btn danger', onClick: () => {
-        state.runs = state.runs.filter(x => x.id !== r.id);
-        save(); navigate('runs');
-      } }, '✕'),
+      el('button', { class: 'icon-btn danger', onClick: () =>
+        deleteWithUndo({ arr: state.runs, item: r, label: 'Sortie', navView: 'runs' }) }, '✕'),
     ));
   });
   wrap.appendChild(list);
@@ -1518,10 +1671,8 @@ views.lifts = () => {
       ),
       el('div', { class: 'actions' },
         el('button', { class: 'icon-btn', onClick: () => openLiftForm(l) }, '✎'),
-        el('button', { class: 'icon-btn danger', onClick: () => {
-          state.lifts = state.lifts.filter(x => x.id !== l.id);
-          save(); navigate('lifts');
-        } }, '✕'),
+        el('button', { class: 'icon-btn danger', onClick: () =>
+          deleteWithUndo({ arr: state.lifts, item: l, label: 'Séance', navView: 'lifts' }) }, '✕'),
       ),
     )));
   }
@@ -1759,10 +1910,8 @@ views.measurements = () => {
       el('div', { class: 'title' }, fmtDate(m.date)),
       el('div', { class: 'meta' }, `Poitrine ${m.chest || '—'} cm · Bras ${m.arm || '—'} cm · Taille ${m.waist || '—'} cm · Cuisse ${m.thigh || '—'} cm`),
     ),
-    el('button', { class: 'icon-btn danger', onClick: () => {
-      state.measurements = state.measurements.filter(x => x.id !== m.id);
-      save(); navigate('measurements');
-    } }, '✕'),
+    el('button', { class: 'icon-btn danger', onClick: () =>
+      deleteWithUndo({ arr: state.measurements, item: m, label: 'Mesure', navView: 'measurements' }) }, '✕'),
   )));
   wrap.appendChild(list);
 
@@ -1855,10 +2004,8 @@ views.photos = () => {
               el('div', { style: 'font-weight: 600;' }, p.label || fmtDate(p.date)),
               el('div', { style: 'color: var(--text-dim); font-size: 11px;' }, fmtDate(p.date)),
             ),
-            el('button', { class: 'icon-btn danger', onClick: () => {
-              state.photos = state.photos.filter(x => x.id !== p.id);
-              save(); navigate('photos');
-            } }, '✕'),
+            el('button', { class: 'icon-btn danger', onClick: () =>
+              deleteWithUndo({ arr: state.photos, item: p, label: 'Photo', navView: 'photos' }) }, '✕'),
           ),
         ));
       });
@@ -1895,10 +2042,8 @@ function comparisonCard(c) {
         el('button', { class: 'mode-btn', 'data-mode': 'slider', title: 'Slider avant/après' }, '◐'),
       ),
       el('button', { class: 'icon-btn', onClick: () => openComparisonForm(c) }, '✎'),
-      el('button', { class: 'icon-btn danger', onClick: () => confirmAction('Supprimer cette comparaison ?', () => {
-        state.comparisons = state.comparisons.filter(x => x.id !== c.id);
-        save(); navigate('photos'); toast('Comparaison supprimée');
-      }) }, '✕'),
+      el('button', { class: 'icon-btn danger', onClick: () =>
+        deleteWithUndo({ arr: state.comparisons, item: c, label: 'Comparaison', navView: 'photos' }) }, '✕'),
     ),
   );
 
@@ -2271,10 +2416,8 @@ function videoCard(v, opts = {}) {
         ),
         el('div', { class: 'actions' },
           el('button', { class: 'icon-btn', title: 'Modifier', onClick: () => openVideoForm({ ...opts, existing: v }) }, '✎'),
-          el('button', { class: 'icon-btn danger', onClick: async () => {
-            if (v.blobKey) { try { await idbDel(STORE_BLOBS, v.blobKey); } catch {} }
-            state[stateKey] = state[stateKey].filter(x => x.id !== v.id); save(); navigate(navView); toast('Vidéo supprimée');
-          } }, '✕'),
+          el('button', { class: 'icon-btn danger', onClick: () =>
+            deleteWithUndo({ arr: state[stateKey], item: v, label: 'Vidéo', navView, removeBlobKey: v.blobKey }) }, '✕'),
         ),
       ),
       (v.tags && v.tags.length) ? el('div', { class: 'video-tags' },
@@ -2584,9 +2727,8 @@ function goalRow(g, withControls) {
         save(); navigate('goals'); toast(g.done ? 'Objectif archivé !' : 'Objectif réactivé');
       } }, g.done ? '↺' : '✓'),
       el('button', { class: 'icon-btn', onClick: () => openGoalForm(g) }, '✎'),
-      el('button', { class: 'icon-btn danger', onClick: () => confirmAction('Supprimer cet objectif ?', () => {
-        state.goals = state.goals.filter(x => x.id !== g.id); save(); navigate('goals');
-      }) }, '✕'),
+      el('button', { class: 'icon-btn danger', onClick: () =>
+        deleteWithUndo({ arr: state.goals, item: g, label: 'Objectif', navView: 'goals' }) }, '✕'),
     ) : null,
   );
   wrap.appendChild(head);
@@ -2687,9 +2829,8 @@ views.recovery = () => {
       el('div', { class: 'meta' },
         `Fatigue ${r.fatigue}/5 · Douleurs ${r.pain}/5${r.notes ? ' · ' + r.notes : ''}`),
     ),
-    el('button', { class: 'icon-btn danger', onClick: () => {
-      state.recovery = state.recovery.filter(x => x.id !== r.id); save(); navigate('recovery');
-    } }, '✕'),
+    el('button', { class: 'icon-btn danger', onClick: () =>
+      deleteWithUndo({ arr: state.recovery, item: r, label: 'Entrée', navView: 'recovery' }) }, '✕'),
   )));
   wrap.appendChild(list);
 
@@ -2774,9 +2915,8 @@ views.mobility = () => {
         ),
         el('div', { class: 'actions' },
           el('button', { class: 'icon-btn', onClick: () => openMobilityForm(m) }, '✎'),
-          el('button', { class: 'icon-btn danger', onClick: () => confirmAction('Supprimer cet exercice ?', () => {
-            state.mobility = state.mobility.filter(x => x.id !== m.id); save(); navigate('mobility');
-          }) }, '✕'),
+          el('button', { class: 'icon-btn danger', onClick: () =>
+            deleteWithUndo({ arr: state.mobility, item: m, label: 'Exercice', navView: 'mobility' }) }, '✕'),
         ),
       ));
     });
@@ -2868,9 +3008,8 @@ views.sobriety = () => {
         el('div', { class: 'title' }, `${fmtDate(s.date)} · ${s.what || 'Écart'}`),
         s.why ? el('div', { class: 'meta' }, s.why) : null,
       ),
-      el('button', { class: 'icon-btn danger', onClick: () => {
-        state.sobriety = state.sobriety.filter(x => x.id !== s.id); save(); navigate('sobriety');
-      } }, '✕'),
+      el('button', { class: 'icon-btn danger', onClick: () =>
+        deleteWithUndo({ arr: state.sobriety, item: s, label: 'Écart', navView: 'sobriety' }) }, '✕'),
     )));
   }
   wrap.appendChild(list);
@@ -3150,6 +3289,9 @@ views.settings = () => {
     });
   });
 
+  // --- Préférences (Review du jour, haptique) ---
+  wrap.appendChild(preferencesCard());
+
   // --- Google Drive ---
   wrap.appendChild(driveSettingsCard());
 
@@ -3169,6 +3311,63 @@ views.settings = () => {
 
   return wrap;
 };
+
+function preferencesCard() {
+  const card = el('div', { class: 'card', style: 'margin-top: 16px;' });
+  card.appendChild(el('h3', {}, '⚙️ Préférences'));
+
+  // Retour haptique
+  const hapticsOn = state.settings?.haptics !== false;
+  const hapticBtn = el('button', { class: `notif-switch ${hapticsOn ? 'on' : ''}`, type: 'button',
+    onClick: () => {
+      const next = !hapticBtn.classList.contains('on');
+      hapticBtn.classList.toggle('on', next);
+      hapticBtn.textContent = next ? 'Activé' : 'Désactivé';
+      state.settings = { ...(state.settings || {}), haptics: next };
+      save();
+      if (next) haptic(15);
+    } }, hapticsOn ? 'Activé' : 'Désactivé');
+  card.appendChild(el('div', { class: 'list-item' },
+    el('div', {},
+      el('div', { class: 'title' }, '📳 Retour haptique'),
+      el('div', { class: 'meta' }, 'Légère vibration au toucher des boutons (mobile).'),
+    ),
+    hapticBtn,
+  ));
+
+  // Personnalisation de la Review du jour
+  card.appendChild(el('div', { style: 'margin-top: 14px;' },
+    el('div', { class: 'title', style: 'font-weight: 600;' }, '☀️ Étapes de la Review du jour'),
+    el('div', { class: 'meta', style: 'margin-bottom: 8px;' }, 'Active/désactive et réordonne les étapes proposées chaque jour.'),
+  ));
+
+  const list = el('div', { class: 'review-config' });
+  const cfg = getReviewConfig().map(s => ({ ...s })); // copie travaillée localement
+
+  const persist = () => { state.settings = { ...(state.settings || {}), reviewConfig: cfg }; save(); };
+  const render = () => {
+    list.innerHTML = '';
+    cfg.forEach((step, i) => {
+      const meta = REVIEW_STEP_META[step.key];
+      const row = el('div', { class: `review-config-row${step.enabled ? '' : ' off'}` },
+        el('div', { class: 'review-config-arrows' },
+          el('button', { class: 'icon-btn', title: 'Monter', disabled: i === 0 ? '' : null,
+            onClick: () => { if (i > 0) { [cfg[i - 1], cfg[i]] = [cfg[i], cfg[i - 1]]; persist(); render(); haptic(); } } }, '▲'),
+          el('button', { class: 'icon-btn', title: 'Descendre', disabled: i === cfg.length - 1 ? '' : null,
+            onClick: () => { if (i < cfg.length - 1) { [cfg[i + 1], cfg[i]] = [cfg[i], cfg[i + 1]]; persist(); render(); haptic(); } } }, '▼'),
+        ),
+        el('div', { class: 'review-config-label' }, `${meta.emoji} ${meta.label}`),
+        el('button', { class: `notif-switch ${step.enabled ? 'on' : ''}`, type: 'button',
+          onClick: () => { step.enabled = !step.enabled; persist(); render(); haptic(); } },
+          step.enabled ? 'Activé' : 'Désactivé'),
+      );
+      list.appendChild(row);
+    });
+  };
+  render();
+  card.appendChild(list);
+  return card;
+}
 
 function driveSettingsCard() {
   const card = el('div', { class: 'card', style: 'margin-top: 16px;' });
@@ -3373,15 +3572,44 @@ function showBackupReminderIfNeeded() {
 // Vidéos et Objectifs sont exclus (pas de saisie quotidienne).
 // =============================================================
 
-function reviewSteps(ctx) {
-  const t = today();
-  const steps = [];
+// Toutes les étapes possibles de la review + leur ordre par défaut
+const REVIEW_STEP_META = {
+  sobriety:     { emoji: '🥗', label: 'Sobriété' },
+  badminton:    { emoji: '🏸', label: 'Badminton' },
+  runs:         { emoji: '🏃', label: 'Course' },
+  lifts:        { emoji: '🏋️', label: 'Musculation' },
+  weight:       { emoji: '⚖️', label: 'Poids' },
+  mobility:     { emoji: '🧘', label: 'AntiFragile' },
+  recovery:     { emoji: '🌙', label: 'Récupération' },
+  measurements: { emoji: '📏', label: 'Mensurations' },
+  photo:        { emoji: '📷', label: 'Photo' },
+};
+const DEFAULT_REVIEW_ORDER = ['sobriety', 'badminton', 'runs', 'lifts', 'weight', 'mobility', 'recovery'];
 
-  // 🥗 Sobriété
-  if (!state.sobriety.some(x => x.date === t)) steps.push({
-    emoji: '🥗', title: 'Sobriété', question: 'As-tu fait un écart aujourd\'hui ?',
-    noSave: true,
-    build() {
+// Config ordonnée [{key, enabled}], complétée des étapes manquantes (désactivées)
+function getReviewConfig() {
+  const saved = Array.isArray(state.settings?.reviewConfig) ? state.settings.reviewConfig : null;
+  const base = saved || [
+    ...DEFAULT_REVIEW_ORDER.map(key => ({ key, enabled: true })),
+    { key: 'measurements', enabled: false },
+    { key: 'photo', enabled: false },
+  ];
+  // Forward-compat : ajoute toute étape connue absente de la config
+  const present = new Set(base.map(s => s.key));
+  for (const key of Object.keys(REVIEW_STEP_META)) {
+    if (!present.has(key)) base.push({ key, enabled: false });
+  }
+  return base.filter(s => REVIEW_STEP_META[s.key]);
+}
+
+// Construit l'étape pour une clé, ou null si déjà renseignée aujourd'hui
+function makeReviewStep(key, ctx, t) {
+  const meta = REVIEW_STEP_META[key];
+  const head = (extra) => ({ emoji: meta.emoji, title: meta.label, ...extra });
+
+  if (key === 'sobriety') {
+    if (state.sobriety.some(x => x.date === t)) return null;
+    return head({ question: 'As-tu fait un écart aujourd\'hui ?', noSave: true, build() {
       const what = el('input', { type: 'text', placeholder: 'Pizza, alcool, sucreries…' });
       const why = el('textarea', { placeholder: 'Stress, sortie entre amis, fatigue…' });
       const slipFields = el('div', { class: 'form', style: 'display: none; margin-top: 12px;' },
@@ -3406,25 +3634,21 @@ function reviewSteps(ctx) {
         slipFields,
       );
       return { el: box };
-    },
-  });
+    } });
+  }
 
-  // 🏸 Badminton — le formulaire complet s'ouvre à la fin de la review
-  if (!state.badminton.matches.some(m => m.date === t)) steps.push({
-    emoji: '🏸', title: 'Badminton', question: 'As-tu joué un match aujourd\'hui ?',
-    noSave: true,
-    build() {
+  if (key === 'badminton') {
+    if (state.badminton.matches.some(m => m.date === t)) return null;
+    return head({ question: 'As-tu joué un match aujourd\'hui ?', noSave: true, build() {
       return { el: el('button', { class: 'btn', style: 'width: 100%;', onClick: () => {
-        ctx.openMatchAtEnd = true;
-        ctx.next(true);
+        ctx.openMatchAtEnd = true; ctx.next(true);
       } }, '🏸 Oui — je saisirai le match à la fin de la review') };
-    },
-  });
+    } });
+  }
 
-  // 🏃 Course
-  if (!state.runs.some(r => r.date === t)) steps.push({
-    emoji: '🏃', title: 'Course', question: 'As-tu couru aujourd\'hui ?',
-    build() {
+  if (key === 'runs') {
+    if (state.runs.some(r => r.date === t)) return null;
+    return head({ question: 'As-tu couru aujourd\'hui ?', build() {
       const dist = el('input', { type: 'number', step: '0.1', min: '0', placeholder: 'ex : 5.2' });
       const dur = el('input', { type: 'number', step: '0.1', min: '0', placeholder: 'ex : 31' });
       const notes = el('textarea', { placeholder: 'Ressenti, parcours…' });
@@ -3441,13 +3665,12 @@ function reviewSteps(ctx) {
         state.runs.push({ id: id(), date: t, distance: d, duration: du, notes: notes.value.trim() });
         save(); return true;
       } };
-    },
-  });
+    } });
+  }
 
-  // 🏋️ Musculation
-  if (!state.lifts.some(l => l.date === t)) steps.push({
-    emoji: '🏋️', title: 'Musculation', question: 'Séance aujourd\'hui ? Sélectionne les groupes travaillés.',
-    build() {
+  if (key === 'lifts') {
+    if (state.lifts.some(l => l.date === t)) return null;
+    return head({ question: 'Séance aujourd\'hui ? Sélectionne les groupes travaillés.', build() {
       const selected = new Set();
       const grid = el('div', { class: 'muscle-grid' });
       MUSCLE_GROUPS.forEach(g => {
@@ -3469,13 +3692,12 @@ function reviewSteps(ctx) {
         state.lifts.push({ id: id(), date: t, groups: Array.from(selected), gym: gym.value, focus: focus.value.trim(), notes: '' });
         save(); return true;
       } };
-    },
-  });
+    } });
+  }
 
-  // ⚖️ Poids
-  if (!state.weight.some(w => w.date === t)) steps.push({
-    emoji: '⚖️', title: 'Poids', question: 'Tu t\'es pesé aujourd\'hui ?',
-    build() {
+  if (key === 'weight') {
+    if (state.weight.some(w => w.date === t)) return null;
+    return head({ question: 'Tu t\'es pesé aujourd\'hui ?', build() {
       const input = el('input', { type: 'number', step: '0.1', min: '20', placeholder: 'ex : 78.4' });
       return {
         el: el('div', { class: 'form' }, el('div', {}, el('label', {}, 'Poids (kg)'), input)),
@@ -3486,15 +3708,61 @@ function reviewSteps(ctx) {
           save(); return true;
         },
       };
-    },
-  });
+    } });
+  }
 
-  // 📏 Mensurations et 📷 Photo : exclus de la review (rythme mensuel / ponctuel)
+  if (key === 'measurements') {
+    if (state.measurements.some(m => m.date === t)) return null;
+    return head({ question: 'Jour de mesures ? (1×/mois suffit)', build() {
+      const mk = () => el('input', { type: 'number', step: '0.5', min: '0' });
+      const chest = mk(), arm = mk(), waist = mk(), thigh = mk();
+      const box = el('div', { class: 'form' },
+        el('div', { class: 'form-row' },
+          el('div', {}, el('label', {}, 'Poitrine (cm)'), chest),
+          el('div', {}, el('label', {}, 'Bras (cm)'), arm),
+        ),
+        el('div', { class: 'form-row' },
+          el('div', {}, el('label', {}, 'Taille (cm)'), waist),
+          el('div', {}, el('label', {}, 'Cuisse (cm)'), thigh),
+        ),
+      );
+      return { el: box, save() {
+        const vals = [chest, arm, waist, thigh].map(i => i.value ? +i.value : null);
+        if (vals.every(v => v == null)) { toast('Entre au moins une mesure — ou clique sur Passer.'); return false; }
+        state.measurements.push({ id: id(), date: t, chest: vals[0], arm: vals[1], waist: vals[2], thigh: vals[3] });
+        save(); return true;
+      } };
+    } });
+  }
 
-  // 🧘 AntiFragile (mobilité)
-  if (!state.mobility.some(m => m.date === t)) steps.push({
-    emoji: '🧘', title: 'AntiFragile', question: 'Mobilité / étirements aujourd\'hui ?',
-    build() {
+  if (key === 'photo') {
+    if (state.photos.some(p => p.date === t)) return null;
+    return head({ question: 'Une photo de progression aujourd\'hui ?', build() {
+      let file = null;
+      const label = el('input', { type: 'text', placeholder: 'Légende (facultatif)' });
+      const fileBtn = el('label', { class: 'btn secondary', style: 'display: block; text-align: center; cursor: pointer;' },
+        '📷 Choisir une photo',
+        el('input', { type: 'file', accept: 'image/*', hidden: '', onChange: (e) => {
+          file = e.target.files[0] || null;
+          fileBtn.firstChild.textContent = file ? `📦 ${file.name}` : '📷 Choisir une photo';
+        } }),
+      );
+      const box = el('div', { class: 'form' }, fileBtn, el('div', {}, el('label', {}, 'Légende'), label));
+      return { el: box, async save() {
+        if (!file) { toast('Choisis une photo — ou clique sur Passer.'); return false; }
+        try {
+          const data = await compressImage(file);
+          state.photos.push({ id: id(), date: t, label: label.value.trim(), data });
+          if (!save()) { state.photos.pop(); return false; }
+          return true;
+        } catch { toast('Impossible de charger cette image.'); return false; }
+      } };
+    } });
+  }
+
+  if (key === 'mobility') {
+    if (state.mobility.some(m => m.date === t)) return null;
+    return head({ question: 'Mobilité / étirements aujourd\'hui ?', build() {
       const title = el('input', { type: 'text', placeholder: 'Ex : Étirement ischios, ouverture de hanches…' });
       const desc = el('textarea', { placeholder: 'Exécution, ressenti, axes…' });
       const box = el('div', { class: 'form' },
@@ -3506,13 +3774,12 @@ function reviewSteps(ctx) {
         state.mobility.push({ id: id(), date: t, title: title.value.trim(), description: desc.value.trim() });
         save(); return true;
       } };
-    },
-  });
+    } });
+  }
 
-  // 🌙 Récupération
-  if (!state.recovery.some(r => r.date === t)) steps.push({
-    emoji: '🌙', title: 'Récupération', question: 'Comment te sens-tu ce soir ?',
-    build() {
+  if (key === 'recovery') {
+    if (state.recovery.some(r => r.date === t)) return null;
+    return head({ question: 'Comment te sens-tu ce soir ?', build() {
       const mkScale = (current) => {
         const scale = el('div', { class: 'scale' });
         let value = current;
@@ -3537,9 +3804,20 @@ function reviewSteps(ctx) {
         state.recovery.push({ id: id(), date: t, fatigue: +fatigue.dataset.value, pain: +pain.dataset.value, notes: '' });
         save(); return true;
       } };
-    },
-  });
+    } });
+  }
 
+  return null;
+}
+
+function reviewSteps(ctx) {
+  const t = today();
+  const steps = [];
+  for (const { key, enabled } of getReviewConfig()) {
+    if (!enabled) continue;
+    const step = makeReviewStep(key, ctx, t);
+    if (step) steps.push(step);
+  }
   return steps;
 }
 
@@ -3746,6 +4024,11 @@ document.addEventListener('DOMContentLoaded', async () => {
   if (toggle) toggle.addEventListener('click', () => document.body.classList.toggle('nav-open'));
   if (backdrop) backdrop.addEventListener('click', closeNav);
   setupNavSwipe();
+
+  // Retour haptique global : léger buzz au toucher des éléments interactifs
+  document.addEventListener('click', (e) => {
+    if (e.target.closest('.btn, .nav-btn, .icon-btn, .tab, .scale-btn, .muscle-btn, .review-btn, .gym-btn, .mode-btn, .notif-switch')) haptic(10);
+  });
 
   navigate('dashboard');
   playAppIntro();
