@@ -650,11 +650,11 @@ function chart(ctx, config) {
 }
 
 const chartTheme = {
-  text: '#b5bbc8',
-  grid: 'rgba(252,239,221,0.06)',
-  accent: '#f6c9a0',
-  accent2: '#fcefdd',
-  info: '#7fb3d9',
+  text: '#d4a690',
+  grid: 'rgba(251,233,215,0.06)',
+  accent: '#f0a35f',
+  accent2: '#fbe9d7',
+  info: '#c8554f',
   success: '#6fcf97',
 };
 
@@ -788,7 +788,7 @@ views.dashboard = () => {
             label: 'Poids (kg)',
             data: state.weight.map(w => w.value),
             borderColor: chartTheme.accent,
-            backgroundColor: 'rgba(246, 201, 160, 0.15)',
+            backgroundColor: 'rgba(240, 163, 95, 0.15)',
             fill: true,
             tension: 0.35,
             pointRadius: 4,
@@ -1203,7 +1203,7 @@ views.weight = () => {
       data: {
         labels: sorted.map(w => shortDate(w.date)),
         datasets: [{ label: 'Poids', data: sorted.map(w => w.value),
-          borderColor: chartTheme.accent, backgroundColor: 'rgba(246,201,160,0.15)', fill: true, tension: 0.35, pointRadius: 4 }],
+          borderColor: chartTheme.accent, backgroundColor: 'rgba(240,163,95,0.15)', fill: true, tension: 0.35, pointRadius: 4 }],
       },
       options: { responsive: true, maintainAspectRatio: false,
         plugins: { legend: { display: false } }, scales: baseScales('kg') }
@@ -1689,8 +1689,8 @@ const BODY_SVG = `
 <svg viewBox="0 0 320 500" role="img" aria-label="Schéma des points de mensuration">
   <defs>
     <linearGradient id="bodyGrad" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#2f4a5e"/>
-      <stop offset="1" stop-color="#16293c"/>
+      <stop offset="0" stop-color="#6b1220"/>
+      <stop offset="1" stop-color="#3a0b10"/>
     </linearGradient>
   </defs>
   <g fill="url(#bodyGrad)">
@@ -1704,25 +1704,25 @@ const BODY_SVG = `
     <rect x="124" y="238" width="30" height="214" rx="15"/>
     <rect x="166" y="238" width="30" height="214" rx="15"/>
   </g>
-  <g stroke="#f6c9a0" stroke-width="2" fill="none" stroke-dasharray="5 4" stroke-linecap="round">
+  <g stroke="#f0a35f" stroke-width="2" fill="none" stroke-dasharray="5 4" stroke-linecap="round">
     <line x1="104" y1="120" x2="216" y2="120"/>
     <line x1="112" y1="182" x2="208" y2="182"/>
     <ellipse cx="93" cy="150" rx="20" ry="11"/>
     <ellipse cx="139" cy="300" rx="22" ry="12"/>
   </g>
-  <g stroke="#f6c9a0" stroke-width="1.5">
+  <g stroke="#f0a35f" stroke-width="1.5">
     <line x1="216" y1="120" x2="244" y2="120"/>
     <line x1="208" y1="182" x2="244" y2="182"/>
     <line x1="73" y1="150" x2="52" y2="150"/>
     <line x1="117" y1="300" x2="60" y2="300"/>
   </g>
-  <g fill="#f6c9a0">
+  <g fill="#f0a35f">
     <circle cx="244" cy="120" r="2.5"/>
     <circle cx="244" cy="182" r="2.5"/>
     <circle cx="52" cy="150" r="2.5"/>
     <circle cx="60" cy="300" r="2.5"/>
   </g>
-  <g fill="#fcefdd" font-family="Inter, sans-serif" font-size="13" font-weight="600">
+  <g fill="#fbe9d7" font-family="Inter, sans-serif" font-size="13" font-weight="600">
     <text x="250" y="124">Poitrine</text>
     <text x="250" y="186">Taille</text>
     <text x="46" y="154" text-anchor="end">Bras</text>
@@ -2700,7 +2700,7 @@ views.recovery = () => {
       data: {
         labels: arr.map(r => shortDate(r.date)),
         datasets: [
-          { label: 'Fatigue', data: arr.map(r => r.fatigue), borderColor: chartTheme.accent, backgroundColor: 'rgba(246,201,160,0.15)', tension: 0.3, fill: true, pointRadius: 4 },
+          { label: 'Fatigue', data: arr.map(r => r.fatigue), borderColor: chartTheme.accent, backgroundColor: 'rgba(240,163,95,0.15)', tension: 0.3, fill: true, pointRadius: 4 },
           { label: 'Douleurs', data: arr.map(r => r.pain), borderColor: chartTheme.accent2, backgroundColor: chartTheme.accent2, tension: 0.3, fill: false, pointRadius: 4 },
         ],
       },
@@ -2954,9 +2954,9 @@ function openSobrietyDay(dateStr) {
     };
 
     const actions = el('div', { style: 'display: flex; gap: 8px;' },
-      el('button', { class: 'btn', style: 'flex:1; background: linear-gradient(135deg, #6fcf97, #4fb97f); color: #0a1828;',
+      el('button', { class: 'btn', style: 'flex:1; background: linear-gradient(135deg, #6fcf97, #4fb97f); color: #2a0708;',
         onClick: () => setEntry(false) }, '✅ Journée saine'),
-      el('button', { class: 'btn', style: 'flex:1; background: linear-gradient(135deg, #eb7a70, #d65c52); color: #0a1828;',
+      el('button', { class: 'btn', style: 'flex:1; background: linear-gradient(135deg, #ff6b5e, #e0524a); color: #2a0708;',
         onClick: () => {
           close();
           openSobrietySlipForm(dateStr, existing);
@@ -3395,12 +3395,12 @@ function reviewSteps(ctx) {
       );
       const box = el('div', {},
         el('div', { style: 'display: flex; gap: 8px;' },
-          el('button', { class: 'btn', style: 'flex:1; background: linear-gradient(135deg, #6fcf97, #4fb97f); color: #0a1828;',
+          el('button', { class: 'btn', style: 'flex:1; background: linear-gradient(135deg, #6fcf97, #4fb97f); color: #2a0708;',
             onClick: () => {
               state.sobriety.push({ id: id(), date: t, hasSlip: false, what: '', why: '' });
               save(); ctx.next(true);
             } }, '✅ Journée saine'),
-          el('button', { class: 'btn', style: 'flex:1; background: linear-gradient(135deg, #eb7a70, #d65c52); color: #0a1828;',
+          el('button', { class: 'btn', style: 'flex:1; background: linear-gradient(135deg, #ff6b5e, #e0524a); color: #2a0708;',
             onClick: () => { slipFields.style.display = 'grid'; what.focus(); } }, '⚠️ Écart'),
         ),
         slipFields,
