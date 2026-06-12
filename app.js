@@ -427,27 +427,35 @@ async function driveBackupNow(onStatus = () => {}, { silent = false } = {}) {
   await driveAuth({ silent });
   const folderId = await driveFolderId();
 
-  // 1) Uploader les vidéos sans driveFileId, 2 à la fois (videos + mobilityVideos)
+  // 1) Uploader les vidéos sans driveFileId, 2 à la fois (videos + mobilityVideos).
+  // Chaque vidéo est isolée : un échec n'empêche ni les autres ni le backup JSON,
+  // et les driveFileId déjà obtenus sont sauvegardés quoi qu'il arrive.
   const vids = [...state.videos, ...state.mobilityVideos].filter(v => v.blobKey && !v.driveFileId);
+  let failedVids = 0;
   if (vids.length) {
     let done = 0;
     const queue = [...vids];
     const worker = async () => {
       let v;
       while ((v = queue.shift())) {
-        const blob = await idbGet(STORE_BLOBS, v.blobKey).catch(() => null);
-        if (!blob) { done++; continue; }
-        const name = `video-${v.id}.${(v.mime || 'video/mp4').split('/')[1] || 'mp4'}`;
-        const file = await driveUploadBlob(name, blob, [folderId], (loaded, total) => {
-          onStatus(`📹 Vidéos ${done + 1}/${vids.length} — ${Math.round((loaded / total) * 100)} %`);
-        });
-        v.driveFileId = file.id;
+        try {
+          const blob = await idbGet(STORE_BLOBS, v.blobKey).catch(() => null);
+          if (!blob) { done++; continue; }
+          const name = `video-${v.id}.${(v.mime || 'video/mp4').split('/')[1] || 'mp4'}`;
+          const file = await driveUploadBlob(name, blob, [folderId], (loaded, total) => {
+            onStatus(`📹 Vidéos ${done + 1}/${vids.length} — ${Math.round((loaded / total) * 100)} %`);
+          });
+          v.driveFileId = file.id;
+          onStatus(`📹 Vidéo ${done + 1}/${vids.length} ✓`);
+        } catch {
+          failedVids++;
+        }
         done++;
-        onStatus(`📹 Vidéo ${done}/${vids.length} ✓`);
       }
     };
     await Promise.all(Array.from({ length: Math.min(2, vids.length) }, worker));
-    save();
+    save(); // mémorise les driveFileId obtenus, même en cas d'échec partiel
+    if (failedVids) onStatus(`⚠️ ${failedVids} vidéo(s) non envoyée(s) — nouvel essai au prochain backup.`);
   }
 
   // 2) JSON complet — seulement si les données ont changé depuis le dernier backup
@@ -3226,6 +3234,17 @@ function driveSettingsCard() {
   card.appendChild(el('h3', { style: 'margin-top: 18px;' }, 'Synchronisation'));
   card.appendChild(el('p', { style: 'color: var(--text-dim); font-size: 13px; margin: 0 0 4px;' },
     'Automatique : ~2 min après chaque modification et à l\'ouverture. Seules les nouveautés sont envoyées (les sauvegardes identiques sont sautées).'));
+
+  // État des vidéos : combien sont à l'abri sur Drive ?
+  const allLocalVids = [...state.videos, ...state.mobilityVideos].filter(v => v.blobKey);
+  if (allLocalVids.length) {
+    const backed = allLocalVids.filter(v => v.driveFileId).length;
+    const pending = allLocalVids.length - backed;
+    card.appendChild(el('p', { style: `font-size: 13px; margin: 4px 0 0; color: ${pending ? 'var(--accent)' : 'var(--success)'};` },
+      pending
+        ? `🎥 Vidéos : ${backed}/${allLocalVids.length} sur Drive — ${pending} en attente d'envoi.`
+        : `🎥 Vidéos : ${backed}/${allLocalVids.length} sauvegardées sur Drive ✓`));
+  }
   card.appendChild(syncActions);
   card.appendChild(progress);
 
