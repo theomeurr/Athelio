@@ -18,7 +18,7 @@ const defaultState = {
   mobilityVideos: [],
   sobriety: [],
   comparisons: [],
-  settings: { liftWeeklyTarget: 3, haptics: true, reviewConfig: null },
+  settings: { liftWeeklyTarget: 3, haptics: true, reviewConfig: null, navConfig: null, theme: 'vintage' },
 };
 
 let state = load();
@@ -743,6 +743,117 @@ function navigate(view) {
   main.innerHTML = '';
   const renderer = views[view] || views.dashboard;
   main.appendChild(renderer());
+  updateFab(view);
+  main.scrollTop = 0;
+  window.scrollTo(0, 0);
+}
+
+// =============================================================
+// Thèmes
+// =============================================================
+
+const THEMES = [
+  { key: 'vintage', label: 'Vintage', emoji: '🔥', bg: '#2a0708' },
+  { key: 'nuit',    label: 'Bleu nuit', emoji: '🌌', bg: '#0a1828' },
+  { key: 'nature',  label: 'Nature', emoji: '🌿', bg: '#16222e' },
+  { key: 'foret',   label: 'Forêt', emoji: '🌲', bg: '#101d18' },
+];
+
+function applyTheme(key) {
+  const theme = THEMES.find(t => t.key === key) ? key : 'vintage';
+  document.documentElement.setAttribute('data-theme', theme);
+  const meta = document.querySelector('meta[name="theme-color"]');
+  if (meta) meta.content = (THEMES.find(t => t.key === theme) || THEMES[0]).bg;
+  refreshChartTheme();
+}
+
+// Recolore les graphiques selon les variables CSS du thème actif
+function refreshChartTheme() {
+  const cs = getComputedStyle(document.documentElement);
+  const v = (n, fb) => (cs.getPropertyValue(n).trim() || fb);
+  chartTheme.text = v('--text-dim', '#d4a690');
+  chartTheme.accent = v('--accent', '#f0a35f');
+  chartTheme.accent2 = v('--text', '#fbe9d7');
+  chartTheme.info = v('--info', '#c8554f');
+  chartTheme.success = v('--success', '#6fcf97');
+}
+
+// =============================================================
+// Navigation configurable (masquer / réordonner les catégories)
+// =============================================================
+
+const NAV_ITEMS = [
+  { key: 'sobriety', emoji: '🥗', label: 'Sobriété' },
+  { key: 'dashboard', emoji: '📊', label: 'Tableau de bord' },
+  { key: 'badminton', emoji: '🏸', label: 'Badminton' },
+  { key: 'runs', emoji: '🏃', label: 'Course' },
+  { key: 'lifts', emoji: '🏋️', label: 'Musculation' },
+  { key: 'weight', emoji: '⚖️', label: 'Poids' },
+  { key: 'measurements', emoji: '📏', label: 'Mensurations' },
+  { key: 'photos', emoji: '📷', label: 'Photos' },
+  { key: 'mobility', emoji: '🧘', label: 'AntiFragile' },
+  { key: 'goals', emoji: '🎯', label: 'Objectifs' },
+  { key: 'recovery', emoji: '🌙', label: 'Récupération' },
+  { key: 'videos', emoji: '🎥', label: 'Vidéos' },
+];
+const NAV_META = Object.fromEntries(NAV_ITEMS.map(i => [i.key, i]));
+
+// Config [{key, visible}], complétée des entrées manquantes
+function getNavConfig() {
+  const saved = Array.isArray(state.settings?.navConfig) ? state.settings.navConfig : null;
+  const base = saved || NAV_ITEMS.map(i => ({ key: i.key, visible: true }));
+  const present = new Set(base.map(s => s.key));
+  for (const i of NAV_ITEMS) if (!present.has(i.key)) base.push({ key: i.key, visible: true });
+  return base.filter(s => NAV_META[s.key]);
+}
+
+function renderNav() {
+  const host = $('#nav-items');
+  if (!host) return;
+  host.innerHTML = '';
+  getNavConfig().forEach(({ key, visible }) => {
+    if (!visible && key !== 'dashboard') return; // le tableau de bord reste toujours accessible
+    const item = NAV_META[key];
+    const btn = el('button', { class: `nav-btn${key === currentView ? ' active' : ''}`, 'data-view': key,
+      onClick: () => { navigate(key); closeNav(); } },
+      el('span', {}, item.emoji), ` ${item.label}`);
+    host.appendChild(btn);
+  });
+}
+
+// =============================================================
+// Bouton d'ajout rapide (FAB)
+// =============================================================
+
+const FAB_ACTIONS = {
+  dashboard:   () => openDailyReview(),
+  sobriety:    () => openSobrietyDay(today()),
+  badminton:   () => openMatchForm(),
+  runs:        () => openRunForm(),
+  lifts:       () => openLiftForm(),
+  weight:      () => simpleEntryForm('weight', { label: 'Poids (kg)', field: 'value', type: 'number', step: '0.1' }),
+  measurements:() => openMeasurementForm(),
+  photos:      () => pickAndAddPhoto(),
+  mobility:    () => openMobilityForm(),
+  goals:       () => openGoalForm(),
+  recovery:    () => openRecoveryForm(),
+  videos:      () => openVideoForm(),
+};
+
+function updateFab(view) {
+  const fab = $('#fab');
+  if (!fab) return;
+  const action = FAB_ACTIONS[view];
+  fab.hidden = !action;
+  fab.onclick = action ? () => { haptic(12); action(); } : null;
+}
+
+function pickAndAddPhoto() {
+  const input = el('input', { type: 'file', accept: 'image/*', hidden: '',
+    onChange: (e) => { if (e.target.files[0]) addPhoto(e.target.files[0]); } });
+  document.body.appendChild(input);
+  input.click();
+  setTimeout(() => input.remove(), 60000);
 }
 
 // =============================================================
@@ -753,50 +864,112 @@ const views = {};
 
 // ---------- Dashboard ----------
 
-// Récap automatique du mois en cours, toutes disciplines confondues
-function monthlyRecapCard() {
-  const now = new Date();
-  const monthStart = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
-  const inMonth = (d) => d >= monthStart;
-  const monthName = now.toLocaleDateString('fr-FR', { month: 'long' });
+// Stats agrégées sur une période [start, endExclusive) (chaînes YYYY-MM-DD)
+function periodStats(start, endExcl) {
+  const inP = (d) => d >= start && d < endExcl;
+  const matches = state.badminton.matches.filter(m => inP(m.date));
+  const wMonth = state.weight.filter(w => inP(w.date)).sort((a, b) => a.date.localeCompare(b.date));
+  const weightDelta = wMonth.length >= 2 ? +(wMonth.at(-1).value - wMonth[0].value).toFixed(1) : null;
+  return {
+    lifts: state.lifts.filter(l => inP(l.date)).length,
+    km: state.runs.filter(r => inP(r.date)).reduce((s, r) => s + (r.distance || 0), 0),
+    matches: matches.length,
+    wins: matches.filter(m => m.result === 'win').length,
+    cleanDays: state.sobriety.filter(s => inP(s.date) && !s.hasSlip).length,
+    mobility: state.mobility.filter(m => inP(m.date)).length,
+    weightDelta,
+  };
+}
 
-  const lifts = state.lifts.filter(l => inMonth(l.date)).length;
-  const runs = state.runs.filter(r => inMonth(r.date));
-  const km = runs.reduce((s, r) => s + (r.distance || 0), 0);
-  const matches = state.badminton.matches.filter(m => inMonth(m.date));
-  const wins = matches.filter(m => m.result === 'win').length;
-  const sob = state.sobriety.filter(s => inMonth(s.date));
-  const cleanDays = sob.filter(s => !s.hasSlip).length;
-  const mobility = state.mobility.filter(m => inMonth(m.date)).length;
+function monthBounds(year, month) { // month 0-11
+  const pad = (n) => String(n).padStart(2, '0');
+  const start = `${year}-${pad(month + 1)}-01`;
+  const ny = month === 11 ? year + 1 : year;
+  const nm = month === 11 ? 0 : month + 1;
+  const endExcl = `${ny}-${pad(nm + 1)}-01`;
+  return { start, endExcl };
+}
 
-  // Delta de poids sur le mois (première vs dernière pesée du mois)
-  const wMonth = state.weight.filter(w => inMonth(w.date));
-  let weightTxt = null;
-  if (wMonth.length >= 2) {
-    const delta = +(wMonth.at(-1).value - wMonth[0].value).toFixed(1);
-    weightTxt = `${delta > 0 ? '+' : ''}${delta} kg`;
-  } else if (wMonth.length === 1) {
-    weightTxt = `${wMonth[0].value} kg`;
-  }
-
-  const card = el('div', { class: 'card' });
-  card.appendChild(el('h3', {}, `📅 Ce mois — ${monthName}`));
+// Construit la grille de stats avec comparaison optionnelle à une période précédente
+function recapGrid(cur, prev) {
+  const delta = (c, p, invert = false) => {
+    if (prev == null || p == null) return null;
+    const d = +(c - p).toFixed(1);
+    if (d === 0) return el('span', { class: 'recap-delta flat' }, '=');
+    const good = invert ? d < 0 : d > 0;
+    return el('span', { class: `recap-delta ${good ? 'up' : 'down'}` }, `${d > 0 ? '▲' : '▼'} ${Math.abs(d)}`);
+  };
   const items = [
-    ['🏋️', lifts, lifts > 1 ? 'séances' : 'séance'],
-    ['🏃', km.toFixed(1), 'km courus'],
-    ['🏸', `${matches.length}`, matches.length ? `${wins}V-${matches.length - wins}D` : 'match'],
-    ['🥗', cleanDays, cleanDays > 1 ? 'jours sains' : 'jour sain'],
-    ['🧘', mobility, 'mobilité'],
+    ['🏋️', cur.lifts, cur.lifts > 1 ? 'séances' : 'séance', delta(cur.lifts, prev?.lifts)],
+    ['🏃', cur.km.toFixed(1), 'km courus', delta(cur.km, prev?.km)],
+    ['🏸', `${cur.matches}`, cur.matches ? `${cur.wins}V-${cur.matches - cur.wins}D` : 'match', delta(cur.matches, prev?.matches)],
+    ['🥗', cur.cleanDays, cur.cleanDays > 1 ? 'jours sains' : 'jour sain', delta(cur.cleanDays, prev?.cleanDays)],
+    ['🧘', cur.mobility, 'mobilité', delta(cur.mobility, prev?.mobility)],
   ];
-  if (weightTxt) items.push(['⚖️', weightTxt, 'poids']);
-
+  if (cur.weightDelta != null) {
+    items.push(['⚖️', `${cur.weightDelta > 0 ? '+' : ''}${cur.weightDelta}`, 'kg (mois)', null]);
+  }
   const grid = el('div', { class: 'recap-grid' });
-  items.forEach(([emoji, val, label]) => grid.appendChild(el('div', { class: 'recap-item' },
+  items.forEach(([emoji, val, label, d]) => grid.appendChild(el('div', { class: 'recap-item' },
     el('div', { class: 'recap-emoji' }, emoji),
     el('div', { class: 'recap-val' }, String(val)),
     el('div', { class: 'recap-label' }, label),
+    d || null,
   )));
-  card.appendChild(grid);
+  return grid;
+}
+
+// Récap du mois en cours, avec comparaison au mois précédent
+function monthlyRecapCard() {
+  const now = new Date();
+  const { start, endExcl } = monthBounds(now.getFullYear(), now.getMonth());
+  const prevDate = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+  const pb = monthBounds(prevDate.getFullYear(), prevDate.getMonth());
+
+  const cur = periodStats(start, endExcl);
+  const prev = periodStats(pb.start, pb.endExcl);
+  const monthName = now.toLocaleDateString('fr-FR', { month: 'long' });
+
+  const card = el('div', { class: 'card' });
+  card.appendChild(el('div', { style: 'display: flex; justify-content: space-between; align-items: baseline; gap: 8px;' },
+    el('h3', { style: 'margin: 0;' }, `📅 Ce mois — ${monthName}`),
+    el('span', { style: 'font-size: 11px; color: var(--text-dim);' }, 'vs mois dernier'),
+  ));
+  card.appendChild(el('div', { style: 'height: 12px;' }));
+  card.appendChild(recapGrid(cur, prev));
+  return card;
+}
+
+// Carte de bilan affichée au début du mois suivant (récap du mois écoulé)
+function endOfMonthRecapCard() {
+  const now = new Date();
+  if (now.getDate() > 5) return null; // visible les 5 premiers jours du mois
+  const prevDate = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+  const key = `athelio:recapSeen:${prevDate.getFullYear()}-${prevDate.getMonth() + 1}`;
+  if (localStorage.getItem(key)) return null;
+
+  const pb = monthBounds(prevDate.getFullYear(), prevDate.getMonth());
+  const ppDate = new Date(prevDate.getFullYear(), prevDate.getMonth() - 1, 1);
+  const ppb = monthBounds(ppDate.getFullYear(), ppDate.getMonth());
+  const cur = periodStats(pb.start, pb.endExcl);
+  const prev = periodStats(ppb.start, ppb.endExcl);
+
+  const total = cur.lifts + cur.matches + Math.round(cur.km) + cur.mobility;
+  if (total === 0 && cur.cleanDays === 0) return null; // mois vide : on n'affiche rien
+
+  const monthName = prevDate.toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' });
+  let note = 'Beau mois — continue sur ta lancée ! 💪';
+  if (cur.lifts >= 12) note = 'Mois solide à la muscu, bravo ! 🏋️';
+  else if (cur.cleanDays >= 25) note = 'Discipline impressionnante côté sobriété. 🥗';
+  else if (cur.km >= 30) note = 'Belles distances ce mois-ci. 🏃';
+
+  const card = el('div', { class: 'card', style: 'border-color: var(--accent);' });
+  card.appendChild(el('div', { style: 'display: flex; justify-content: space-between; align-items: center; gap: 8px;' },
+    el('h3', { style: 'margin: 0; color: var(--accent);' }, `🎉 Bilan de ${monthName}`),
+    el('button', { class: 'icon-btn', title: 'Masquer', onClick: () => { localStorage.setItem(key, '1'); navigate('dashboard'); } }, '✕'),
+  ));
+  card.appendChild(el('p', { style: 'margin: 6px 0 12px; font-size: 13px; color: var(--text-dim);' }, note));
+  card.appendChild(recapGrid(cur, prev));
   return card;
 }
 
@@ -836,8 +1009,9 @@ function activityHeatmapCard() {
       if (n) activeDays++;
       const future = day > today0;
       const level = future ? 'future' : n === 0 ? '0' : n === 1 ? '1' : n === 2 ? '2' : n === 3 ? '3' : '4';
-      col.appendChild(el('div', { class: `heatmap-cell lvl-${level}`,
-        title: future ? '' : `${fmtDate(ds)} — ${n} activité${n > 1 ? 's' : ''}` }));
+      col.appendChild(el('div', { class: `heatmap-cell lvl-${level}${future ? '' : ' tappable'}`,
+        title: future ? '' : `${fmtDate(ds)} — ${n} activité${n > 1 ? 's' : ''}`,
+        onClick: future ? null : () => { haptic(); openDayDetails(ds); } }));
     }
     grid.appendChild(col);
   }
@@ -852,6 +1026,44 @@ function activityHeatmapCard() {
     ),
   ));
   return card;
+}
+
+// Détail des activités d'un jour donné (clic sur une case de la heatmap)
+function openDayDetails(ds) {
+  const lines = [];
+  state.lifts.filter(l => l.date === ds).forEach(l =>
+    lines.push(['🏋️', `Muscu — ${(l.groups || []).map(muscleLabel).join(', ') || '—'}${l.gym ? ' · ' + gymLabel(l.gym) : ''}`]));
+  state.runs.filter(r => r.date === ds).forEach(r =>
+    lines.push(['🏃', `Course — ${r.distance} km en ${r.duration} min`]));
+  state.badminton.matches.filter(m => m.date === ds).forEach(m =>
+    lines.push(['🏸', `Badminton — ${m.type || 'match'} (${m.result === 'win' ? 'victoire' : m.result === 'loss' ? 'défaite' : 'nul'})`]));
+  state.mobility.filter(m => m.date === ds).forEach(m =>
+    lines.push(['🧘', `AntiFragile — ${m.title || m.focus || 'mobilité'}`]));
+  state.weight.filter(w => w.date === ds).forEach(w =>
+    lines.push(['⚖️', `Poids — ${w.value} kg`]));
+  state.measurements.filter(m => m.date === ds).forEach(() =>
+    lines.push(['📏', 'Mensurations prises']));
+  state.recovery.filter(r => r.date === ds).forEach(r =>
+    lines.push(['🌙', `Récup — fatigue ${r.fatigue}/5 · douleurs ${r.pain}/5`]));
+  state.sobriety.filter(s => s.date === ds).forEach(s =>
+    lines.push([s.hasSlip ? '⚠️' : '✅', s.hasSlip ? `Écart — ${s.what || 'noté'}` : 'Journée saine']));
+  state.photos.filter(p => p.date === ds).forEach(() =>
+    lines.push(['📷', 'Photo ajoutée']));
+
+  openModal(fmtDate(ds), (close) => {
+    const wrap = el('div');
+    if (!lines.length) {
+      wrap.appendChild(emptyState('Rien ce jour-là', 'Aucune activité enregistrée.'));
+    } else {
+      lines.forEach(([emoji, txt]) => wrap.appendChild(el('div', { class: 'day-detail-row' },
+        el('span', { class: 'day-detail-emoji' }, emoji),
+        el('span', {}, txt),
+      )));
+    }
+    wrap.appendChild(el('div', { class: 'form-actions', style: 'margin-top: 14px;' },
+      el('button', { class: 'btn secondary', onClick: close }, 'Fermer')));
+    return wrap;
+  });
 }
 
 views.dashboard = () => {
@@ -893,6 +1105,10 @@ views.dashboard = () => {
   wrap.appendChild(streaks);
 
   wrap.appendChild(el('div', { style: 'height: 16px;' }));
+
+  // Bilan du mois écoulé (début de mois, dismissible)
+  const eom = endOfMonthRecapCard();
+  if (eom) { wrap.appendChild(eom); wrap.appendChild(el('div', { style: 'height: 16px;' })); }
 
   // Récap du mois en cours
   wrap.appendChild(monthlyRecapCard());
@@ -3316,6 +3532,24 @@ function preferencesCard() {
   const card = el('div', { class: 'card', style: 'margin-top: 16px;' });
   card.appendChild(el('h3', {}, '⚙️ Préférences'));
 
+  // Thème
+  card.appendChild(el('div', { class: 'title', style: 'font-weight: 600;' }, '🎨 Thème'));
+  card.appendChild(el('div', { class: 'meta', style: 'margin-bottom: 8px;' }, 'Change l\'ambiance de couleurs de l\'app.'));
+  const current = state.settings?.theme || 'vintage';
+  const themeGrid = el('div', { class: 'theme-grid' });
+  THEMES.forEach(t => {
+    const btn = el('button', { class: `theme-swatch theme-${t.key}${current === t.key ? ' active' : ''}`, type: 'button',
+      onClick: () => {
+        state.settings = { ...(state.settings || {}), theme: t.key };
+        save(); applyTheme(t.key); haptic(); navigate('settings');
+      } },
+      el('span', { class: 'theme-swatch-dot' }),
+      el('span', {}, `${t.emoji} ${t.label}`),
+    );
+    themeGrid.appendChild(btn);
+  });
+  card.appendChild(themeGrid);
+
   // Retour haptique
   const hapticsOn = state.settings?.haptics !== false;
   const hapticBtn = el('button', { class: `notif-switch ${hapticsOn ? 'on' : ''}`, type: 'button',
@@ -3366,6 +3600,40 @@ function preferencesCard() {
   };
   render();
   card.appendChild(list);
+
+  // Catégories du menu : activer/désactiver et réordonner
+  card.appendChild(el('div', { style: 'margin-top: 16px;' },
+    el('div', { class: 'title', style: 'font-weight: 600;' }, '📂 Catégories du menu'),
+    el('div', { class: 'meta', style: 'margin-bottom: 8px;' }, 'Masque ou réordonne les sections de la barre latérale.'),
+  ));
+  const navList = el('div', { class: 'review-config' });
+  const navCfg = getNavConfig().map(s => ({ ...s }));
+  const persistNav = () => { state.settings = { ...(state.settings || {}), navConfig: navCfg }; save(); renderNav(); };
+  const renderNavCfg = () => {
+    navList.innerHTML = '';
+    navCfg.forEach((item, i) => {
+      const meta = NAV_META[item.key];
+      const isDash = item.key === 'dashboard';
+      const row = el('div', { class: `review-config-row${item.visible ? '' : ' off'}` },
+        el('div', { class: 'review-config-arrows' },
+          el('button', { class: 'icon-btn', disabled: i === 0 ? '' : null,
+            onClick: () => { if (i > 0) { [navCfg[i - 1], navCfg[i]] = [navCfg[i], navCfg[i - 1]]; persistNav(); renderNavCfg(); haptic(); } } }, '▲'),
+          el('button', { class: 'icon-btn', disabled: i === navCfg.length - 1 ? '' : null,
+            onClick: () => { if (i < navCfg.length - 1) { [navCfg[i + 1], navCfg[i]] = [navCfg[i], navCfg[i + 1]]; persistNav(); renderNavCfg(); haptic(); } } }, '▼'),
+        ),
+        el('div', { class: 'review-config-label' }, `${meta.emoji} ${meta.label}`),
+        isDash
+          ? el('span', { class: 'meta', style: 'font-size: 11px;' }, 'toujours visible')
+          : el('button', { class: `notif-switch ${item.visible ? 'on' : ''}`, type: 'button',
+              onClick: () => { item.visible = !item.visible; persistNav(); renderNavCfg(); haptic(); } },
+              item.visible ? 'Visible' : 'Masqué'),
+      );
+      navList.appendChild(row);
+    });
+  };
+  renderNavCfg();
+  card.appendChild(navList);
+
   return card;
 }
 
@@ -3994,7 +4262,11 @@ function playAppIntro() {
   setTimeout(() => document.body.classList.remove('app-intro'), 1000);
 }
 
+// Applique le thème dès que possible (le script est en fin de <body>, le DOM existe)
+applyTheme(state.settings?.theme);
+
 document.addEventListener('DOMContentLoaded', async () => {
+  applyTheme(state.settings?.theme);
   // 1) Verrou PIN si configuré — l'écran PIN se révèle sous le splash
   if (getPinConfig()) {
     document.body.classList.add('locked');
@@ -4011,7 +4283,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     try { await navigator.storage.persist(); } catch {}
   }
 
-  $$('.nav-btn').forEach(b => b.addEventListener('click', () => { navigate(b.dataset.view); closeNav(); }));
+  renderNav();
   const reviewBtn = $('#review-btn');
   if (reviewBtn) reviewBtn.addEventListener('click', () => { closeNav(); openDailyReview(); });
   $('#import-file').addEventListener('change', (e) => { if (e.target.files[0]) importData(e.target.files[0]); });
