@@ -98,6 +98,7 @@ function matchPartnerLabel(m) {
 function save() {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    scheduleAutoDriveBackup(); // backup Drive silencieux ~2 min après la dernière modif
     return true;
   } catch {
     toast('Stockage plein — préfère un lien plutôt qu’un fichier vidéo lourd.');
@@ -234,6 +235,9 @@ async function savePin(pin) {
 const DRIVE_CLIENT_KEY     = 'athelio:drive:clientId';
 const DRIVE_FOLDER_KEY     = 'athelio:drive:folderId';
 const DRIVE_LAST_BACKUP    = 'athelio:drive:lastBackup';
+const DRIVE_TOKEN_KEY      = 'athelio:drive:token';
+const DRIVE_HASH_KEY       = 'athelio:drive:lastHash';
+const DRIVE_KEEP_BACKUPS   = 14; // rotation : on garde les 14 derniers JSON sur Drive
 const DRIVE_SCOPE          = 'https://www.googleapis.com/auth/drive.file';
 const DRIVE_FOLDER_NAME    = 'Athelio Backups';
 // Client ID OAuth intégré par défaut (sûr à exposer : un Client ID web est public,
@@ -242,7 +246,19 @@ const DRIVE_FOLDER_NAME    = 'Athelio Backups';
 const DEFAULT_DRIVE_CLIENT_ID = '1037611827802-e4290ortbq1t565nal8d35undkmp1fsg.apps.googleusercontent.com';
 
 let driveTokenClient = null;
-let driveToken = null; // { access_token, expires_at }
+let driveToken = loadDriveToken(); // { access_token, expires_at } — persiste entre rechargements
+
+// Le token (valide ~1 h) survit aux rechargements de page : moins de reconnexions
+function loadDriveToken() {
+  try {
+    const t = JSON.parse(localStorage.getItem(DRIVE_TOKEN_KEY));
+    if (t && t.access_token && t.expires_at > Date.now()) return t;
+  } catch {}
+  return null;
+}
+function persistDriveToken(t) {
+  try { localStorage.setItem(DRIVE_TOKEN_KEY, JSON.stringify(t)); } catch {}
+}
 
 function driveClientId()   { return localStorage.getItem(DRIVE_CLIENT_KEY) || DEFAULT_DRIVE_CLIENT_ID; }
 function setDriveClientId(v) {
@@ -275,6 +291,7 @@ function driveRequestToken({ silent = false } = {}) {
         access_token: resp.access_token,
         expires_at: Date.now() + (resp.expires_in - 60) * 1000,
       };
+      persistDriveToken(driveToken);
       resolve(resp.access_token);
     };
     try { driveTokenClient.requestAccessToken({ prompt: silent ? '' : 'consent' }); }
@@ -292,14 +309,21 @@ function driveDisconnect() {
     try { google.accounts.oauth2.revoke(driveToken.access_token, () => {}); } catch {}
   }
   driveToken = null;
+  localStorage.removeItem(DRIVE_TOKEN_KEY);
   localStorage.removeItem(DRIVE_FOLDER_KEY);
   toast('Déconnecté de Google Drive');
 }
 
-async function driveApi(url, opts = {}) {
+async function driveApi(url, opts = {}, retried = false) {
   const token = await driveAuth({ silent: true });
   const headers = { ...(opts.headers || {}), Authorization: 'Bearer ' + token };
   const r = await fetch(url, { ...opts, headers });
+  // Token révoqué/expiré en cours d'usage : on le jette et on retente une fois en silencieux
+  if (r.status === 401 && !retried) {
+    driveToken = null;
+    localStorage.removeItem(DRIVE_TOKEN_KEY);
+    return driveApi(url, opts, true);
+  }
   if (!r.ok) {
     const txt = await r.text().catch(() => '');
     throw new Error(`Drive ${r.status}: ${txt.slice(0, 200)}`);
@@ -391,34 +415,72 @@ async function driveDownloadBlob(fileId) {
   return r.blob();
 }
 
-// Backup complet : JSON + vidéos manquantes
-async function driveBackupNow(onStatus = () => {}) {
-  await driveAuth({ silent: false });
+// Empreinte des données — sert à sauter le backup si rien n'a changé
+async function driveStateHash() {
+  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify(state)));
+  return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+// Backup complet : JSON + vidéos manquantes.
+// Saute l'upload si les données n'ont pas changé depuis le dernier backup.
+async function driveBackupNow(onStatus = () => {}, { silent = false } = {}) {
+  await driveAuth({ silent });
   const folderId = await driveFolderId();
 
-  // 1) Uploader les vidéos qui n'ont pas encore de driveFileId (videos + mobilityVideos)
+  // 1) Uploader les vidéos sans driveFileId, 2 à la fois (videos + mobilityVideos).
+  // Chaque vidéo est isolée : un échec n'empêche ni les autres ni le backup JSON,
+  // et les driveFileId déjà obtenus sont sauvegardés quoi qu'il arrive.
   const vids = [...state.videos, ...state.mobilityVideos].filter(v => v.blobKey && !v.driveFileId);
-  for (let i = 0; i < vids.length; i++) {
-    const v = vids[i];
-    onStatus(`📹 Vidéo ${i + 1}/${vids.length}…`);
-    const blob = await idbGet(STORE_BLOBS, v.blobKey);
-    if (!blob) continue;
-    const name = `video-${v.id}.${(v.mime || 'video/mp4').split('/')[1] || 'mp4'}`;
-    const file = await driveUploadBlob(name, blob, [folderId], (loaded, total) => {
-      const pct = Math.round((loaded / total) * 100);
-      onStatus(`📹 Vidéo ${i + 1}/${vids.length} — ${pct} %`);
-    });
-    v.driveFileId = file.id;
+  let failedVids = 0;
+  if (vids.length) {
+    let done = 0;
+    const queue = [...vids];
+    const worker = async () => {
+      let v;
+      while ((v = queue.shift())) {
+        try {
+          const blob = await idbGet(STORE_BLOBS, v.blobKey).catch(() => null);
+          if (!blob) { done++; continue; }
+          const name = `video-${v.id}.${(v.mime || 'video/mp4').split('/')[1] || 'mp4'}`;
+          const file = await driveUploadBlob(name, blob, [folderId], (loaded, total) => {
+            onStatus(`📹 Vidéos ${done + 1}/${vids.length} — ${Math.round((loaded / total) * 100)} %`);
+          });
+          v.driveFileId = file.id;
+          onStatus(`📹 Vidéo ${done + 1}/${vids.length} ✓`);
+        } catch {
+          failedVids++;
+        }
+        done++;
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(2, vids.length) }, worker));
+    save(); // mémorise les driveFileId obtenus, même en cas d'échec partiel
+    if (failedVids) onStatus(`⚠️ ${failedVids} vidéo(s) non envoyée(s) — nouvel essai au prochain backup.`);
   }
-  save();
 
-  // 2) JSON complet (les vidéos contiennent désormais leur driveFileId)
+  // 2) JSON complet — seulement si les données ont changé depuis le dernier backup
+  const hash = await driveStateHash();
+  if (!vids.length && hash === localStorage.getItem(DRIVE_HASH_KEY)) {
+    localStorage.setItem(DRIVE_LAST_BACKUP, String(Date.now()));
+    onStatus('✅ Déjà à jour — rien à sauvegarder.');
+    return null;
+  }
   onStatus('📦 Sauvegarde JSON…');
   const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-  const file = await driveUploadJson(`athelio-${stamp}.json`, JSON.stringify(state, null, 2), [folderId]);
+  const file = await driveUploadJson(`athelio-${stamp}.json`, JSON.stringify(state), [folderId]);
 
   localStorage.setItem(DRIVE_LAST_BACKUP, String(Date.now()));
+  localStorage.setItem(DRIVE_HASH_KEY, hash);
   onStatus(`✅ Sauvegarde terminée (${file.name})`);
+
+  // 3) Rotation : on ne garde que les N derniers backups JSON sur Drive
+  try {
+    const files = await driveListBackups();
+    for (const f of files.slice(DRIVE_KEEP_BACKUPS)) {
+      await driveApi(`https://www.googleapis.com/drive/v3/files/${f.id}`, { method: 'DELETE' });
+    }
+  } catch { /* la rotation est best-effort */ }
+
   return file;
 }
 
@@ -450,14 +512,38 @@ async function driveRestoreFromFile(fileId, onStatus = () => {}) {
   toast('Restauration terminée');
 }
 
+let driveBackupRunning = false;
+
 async function maybeAutoDriveBackup() {
-  if (!driveClientId()) return;
-  if (Date.now() - driveLastBackup() < 86400000) return; // 1/jour max
+  if (!driveClientId() || driveBackupRunning) return;
+  if (Date.now() - driveLastBackup() < 6 * 3600000) return; // au plus toutes les 6 h à l'ouverture
   // Tentative silencieuse — si on n'a pas de token actif, on n'embête pas l'utilisateur
+  driveBackupRunning = true;
   try {
     await driveAuth({ silent: true });
-    await driveBackupNow();
+    await driveBackupNow(() => {}, { silent: true });
   } catch { /* silencieux */ }
+  finally { driveBackupRunning = false; }
+}
+
+// Backup déclenché par les modifications : ~2 min après la dernière saisie,
+// silencieux, et quasi gratuit si rien n'a changé (empreinte comparée).
+let autoBackupTimer = null;
+
+function scheduleAutoDriveBackup() {
+  if (!driveClientId()) return;
+  if (autoBackupTimer) clearTimeout(autoBackupTimer);
+  autoBackupTimer = setTimeout(async () => {
+    autoBackupTimer = null;
+    if (driveBackupRunning) return;
+    if (Date.now() - driveLastBackup() < 10 * 60000) return; // au plus 1 / 10 min
+    driveBackupRunning = true;
+    try {
+      await driveAuth({ silent: true });
+      await driveBackupNow(() => {}, { silent: true });
+    } catch { /* silencieux — retentera à la prochaine modif */ }
+    finally { driveBackupRunning = false; }
+  }, 120000);
 }
 
 // =============================================================
@@ -3147,7 +3233,18 @@ function driveSettingsCard() {
   );
   card.appendChild(el('h3', { style: 'margin-top: 18px;' }, 'Synchronisation'));
   card.appendChild(el('p', { style: 'color: var(--text-dim); font-size: 13px; margin: 0 0 4px;' },
-    'Sauvegarde JSON + vidéos non encore envoyées. Lancé automatiquement 1 fois/jour si tu es connecté.'));
+    'Automatique : ~2 min après chaque modification et à l\'ouverture. Seules les nouveautés sont envoyées (les sauvegardes identiques sont sautées).'));
+
+  // État des vidéos : combien sont à l'abri sur Drive ?
+  const allLocalVids = [...state.videos, ...state.mobilityVideos].filter(v => v.blobKey);
+  if (allLocalVids.length) {
+    const backed = allLocalVids.filter(v => v.driveFileId).length;
+    const pending = allLocalVids.length - backed;
+    card.appendChild(el('p', { style: `font-size: 13px; margin: 4px 0 0; color: ${pending ? 'var(--accent)' : 'var(--success)'};` },
+      pending
+        ? `🎥 Vidéos : ${backed}/${allLocalVids.length} sur Drive — ${pending} en attente d'envoi.`
+        : `🎥 Vidéos : ${backed}/${allLocalVids.length} sauvegardées sur Drive ✓`));
+  }
   card.appendChild(syncActions);
   card.appendChild(progress);
 
@@ -3657,6 +3754,6 @@ document.addEventListener('DOMContentLoaded', async () => {
   maybeAutoSnapshot();
   showBackupReminderIfNeeded();
 
-  // 4) Auto-backup Google Drive (1/jour, silencieux)
+  // 4) Auto-backup Google Drive à l'ouverture (silencieux, max 1/6 h)
   setTimeout(() => maybeAutoDriveBackup(), 2000); // laisse GSI se charger
 });
