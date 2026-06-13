@@ -782,21 +782,34 @@ function refreshChartTheme() {
 // Navigation configurable (masquer / réordonner les catégories)
 // =============================================================
 
+// Sections (titres) de la barre latérale, dans l'ordre d'affichage.
+// Un label vide => le groupe s'affiche sans titre (en haut).
+const NAV_SECTIONS = [
+  { key: 'general',    label: '' },
+  { key: 'sport',      label: 'Sport' },
+  { key: 'silhouette', label: 'Silhouette' },
+  { key: 'bienetre',   label: 'Bien-être' },
+  { key: 'divers',     label: 'Divers' },
+];
+const SECTION_ORDER = Object.fromEntries(NAV_SECTIONS.map((s, i) => [s.key, i]));
+const SECTION_LABEL = Object.fromEntries(NAV_SECTIONS.map(s => [s.key, s.label]));
+
 const NAV_ITEMS = [
-  { key: 'sobriety', emoji: '🥗', label: 'Sobriété' },
-  { key: 'dashboard', emoji: '📊', label: 'Tableau de bord' },
-  { key: 'badminton', emoji: '🏸', label: 'Badminton' },
-  { key: 'runs', emoji: '🏃', label: 'Course' },
-  { key: 'lifts', emoji: '🏋️', label: 'Musculation' },
-  { key: 'weight', emoji: '⚖️', label: 'Poids' },
-  { key: 'measurements', emoji: '📏', label: 'Mensurations' },
-  { key: 'photos', emoji: '📷', label: 'Photos' },
-  { key: 'mobility', emoji: '🧘', label: 'AntiFragile' },
-  { key: 'goals', emoji: '🎯', label: 'Objectifs' },
-  { key: 'recovery', emoji: '🌙', label: 'Récupération' },
-  { key: 'videos', emoji: '🎥', label: 'Vidéos' },
+  { key: 'dashboard',    emoji: '📊', label: 'Tableau de bord', section: 'general' },
+  { key: 'sobriety',     emoji: '🥗', label: 'Sobriété',        section: 'general' },
+  { key: 'badminton',    emoji: '🏸', label: 'Badminton',       section: 'sport' },
+  { key: 'lifts',        emoji: '🏋️', label: 'Musculation',     section: 'sport' },
+  { key: 'runs',         emoji: '🏃', label: 'Course',          section: 'sport' },
+  { key: 'weight',       emoji: '⚖️', label: 'Poids',           section: 'silhouette' },
+  { key: 'measurements', emoji: '📏', label: 'Mensurations',    section: 'silhouette' },
+  { key: 'photos',       emoji: '📷', label: 'Photos',          section: 'silhouette' },
+  { key: 'mobility',     emoji: '🧘', label: 'AntiFragile',     section: 'bienetre' },
+  { key: 'recovery',     emoji: '🌙', label: 'Récupération',    section: 'bienetre' },
+  { key: 'goals',        emoji: '🎯', label: 'Objectifs',       section: 'divers' },
+  { key: 'videos',       emoji: '🎥', label: 'Vidéos',          section: 'divers' },
 ];
 const NAV_META = Object.fromEntries(NAV_ITEMS.map(i => [i.key, i]));
+const sectionOf = (key) => SECTION_ORDER[NAV_META[key].section] ?? 0;
 
 // Config [{key, visible}], complétée des entrées manquantes
 function getNavConfig() {
@@ -811,13 +824,23 @@ function renderNav() {
   const host = $('#nav-items');
   if (!host) return;
   host.innerHTML = '';
-  getNavConfig().forEach(({ key, visible }) => {
-    if (!visible && key !== 'dashboard') return; // le tableau de bord reste toujours accessible
+  // On regroupe par section (tri stable : l'ordre choisi dans les réglages
+  // est conservé à l'intérieur d'une même section).
+  const items = getNavConfig()
+    .filter(({ key, visible }) => visible || key === 'dashboard') // le tableau de bord reste toujours accessible
+    .map((cfg, i) => ({ ...cfg, _i: i }))
+    .sort((a, b) => (sectionOf(a.key) - sectionOf(b.key)) || (a._i - b._i));
+  let lastSection;
+  items.forEach(({ key }) => {
     const item = NAV_META[key];
-    const btn = el('button', { class: `nav-btn${key === currentView ? ' active' : ''}`, 'data-view': key,
+    if (item.section !== lastSection) {
+      lastSection = item.section;
+      const label = SECTION_LABEL[item.section];
+      if (label) host.appendChild(el('div', { class: 'nav-section' }, label));
+    }
+    host.appendChild(el('button', { class: `nav-btn${key === currentView ? ' active' : ''}`, 'data-view': key,
       onClick: () => { navigate(key); closeNav(); } },
-      el('span', {}, item.emoji), ` ${item.label}`);
-    host.appendChild(btn);
+      el('span', {}, item.emoji), ` ${item.label}`));
   });
 }
 
@@ -3601,25 +3624,36 @@ function preferencesCard() {
   render();
   card.appendChild(list);
 
-  // Catégories du menu : activer/désactiver et réordonner
+  // Catégories du menu : activer/désactiver et réordonner (au sein de chaque section)
   card.appendChild(el('div', { style: 'margin-top: 16px;' },
     el('div', { class: 'title', style: 'font-weight: 600;' }, '📂 Catégories du menu'),
-    el('div', { class: 'meta', style: 'margin-bottom: 8px;' }, 'Masque ou réordonne les sections de la barre latérale.'),
+    el('div', { class: 'meta', style: 'margin-bottom: 8px;' }, 'Masque les catégories ou réordonne-les à l\'intérieur de leur section.'),
   ));
   const navList = el('div', { class: 'review-config' });
   const navCfg = getNavConfig().map(s => ({ ...s }));
+  // Regroupe la config par section (tri stable) pour coller à l'affichage du menu.
+  navCfg.sort((a, b) => sectionOf(a.key) - sectionOf(b.key));
   const persistNav = () => { state.settings = { ...(state.settings || {}), navConfig: navCfg }; save(); renderNav(); };
   const renderNavCfg = () => {
     navList.innerHTML = '';
+    let lastSection;
     navCfg.forEach((item, i) => {
       const meta = NAV_META[item.key];
+      if (meta.section !== lastSection) {
+        lastSection = meta.section;
+        const label = SECTION_LABEL[meta.section];
+        if (label) navList.appendChild(el('div', { class: 'nav-section' }, label));
+      }
       const isDash = item.key === 'dashboard';
+      // Réordonnancement limité à la section : on désactive les flèches aux bords d'une section.
+      const upOk = i > 0 && NAV_META[navCfg[i - 1].key].section === meta.section;
+      const downOk = i < navCfg.length - 1 && NAV_META[navCfg[i + 1].key].section === meta.section;
       const row = el('div', { class: `review-config-row${item.visible ? '' : ' off'}` },
         el('div', { class: 'review-config-arrows' },
-          el('button', { class: 'icon-btn', disabled: i === 0 ? '' : null,
-            onClick: () => { if (i > 0) { [navCfg[i - 1], navCfg[i]] = [navCfg[i], navCfg[i - 1]]; persistNav(); renderNavCfg(); haptic(); } } }, '▲'),
-          el('button', { class: 'icon-btn', disabled: i === navCfg.length - 1 ? '' : null,
-            onClick: () => { if (i < navCfg.length - 1) { [navCfg[i + 1], navCfg[i]] = [navCfg[i], navCfg[i + 1]]; persistNav(); renderNavCfg(); haptic(); } } }, '▼'),
+          el('button', { class: 'icon-btn', disabled: upOk ? null : '',
+            onClick: () => { if (upOk) { [navCfg[i - 1], navCfg[i]] = [navCfg[i], navCfg[i - 1]]; persistNav(); renderNavCfg(); haptic(); } } }, '▲'),
+          el('button', { class: 'icon-btn', disabled: downOk ? null : '',
+            onClick: () => { if (downOk) { [navCfg[i + 1], navCfg[i]] = [navCfg[i], navCfg[i + 1]]; persistNav(); renderNavCfg(); haptic(); } } }, '▼'),
         ),
         el('div', { class: 'review-config-label' }, `${meta.emoji} ${meta.label}`),
         isDash
