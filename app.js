@@ -16,6 +16,7 @@ const defaultState = {
   videos: [],
   mobility: [],
   mobilityVideos: [],
+  spa: [],
   sobriety: [],
   comparisons: [],
   settings: { liftWeeklyTarget: 3, haptics: true, reviewConfig: null, navConfig: null, theme: 'vintage' },
@@ -48,7 +49,7 @@ function migrate(parsed) {
   s.photos = parsed.photos || old.photos || [];
   delete s.progression;
   s.badminton = { ...defaultState.badminton, ...(parsed.badminton || {}) };
-  for (const k of ['weight', 'measurements', 'runs', 'lifts', 'photos', 'goals', 'recovery', 'videos', 'mobility', 'mobilityVideos', 'sobriety', 'comparisons']) {
+  for (const k of ['weight', 'measurements', 'runs', 'lifts', 'photos', 'goals', 'recovery', 'videos', 'mobility', 'mobilityVideos', 'spa', 'sobriety', 'comparisons']) {
     if (!Array.isArray(s[k])) s[k] = [];
   }
   if (!Array.isArray(s.badminton.matches)) s.badminton.matches = [];
@@ -805,6 +806,7 @@ const NAV_ITEMS = [
   { key: 'photos',       emoji: '📷', label: 'Photos',          section: 'silhouette' },
   { key: 'mobility',     emoji: '🧘', label: 'AntiFragile',     section: 'bienetre' },
   { key: 'recovery',     emoji: '🌙', label: 'Récupération',    section: 'bienetre' },
+  { key: 'spa',          emoji: '🧖', label: 'Spa',             section: 'bienetre' },
   { key: 'goals',        emoji: '🎯', label: 'Objectifs',       section: 'divers' },
   { key: 'videos',       emoji: '🎥', label: 'Vidéos',          section: 'divers' },
 ];
@@ -860,6 +862,7 @@ const FAB_ACTIONS = {
   mobility:    () => openMobilityForm(),
   goals:       () => openGoalForm(),
   recovery:    () => openRecoveryForm(),
+  spa:         () => openSpaForm(),
   videos:      () => openVideoForm(),
 };
 
@@ -3082,6 +3085,122 @@ function openMobilityForm(existing) {
       </div>
     `;
     form.querySelector('button[type=button]').onclick = close;
+    return form;
+  });
+}
+
+// ---------- Spa / Bien-être ----------
+
+const SPA_SOINS = [
+  { key: 'sauna',    emoji: '🧖', label: 'Sauna' },
+  { key: 'hammam',   emoji: '♨️', label: 'Hammam' },
+  { key: 'jacuzzi',  emoji: '🛁', label: 'Jacuzzi' },
+  { key: 'massage',  emoji: '💆', label: 'Massage' },
+  { key: 'coldbath', emoji: '🧊', label: 'Bain froid' },
+  { key: 'cryo',     emoji: '❄️', label: 'Cryothérapie' },
+  { key: 'facial',   emoji: '🧴', label: 'Soin visage' },
+  { key: 'gommage',  emoji: '✨', label: 'Gommage' },
+  { key: 'piscine',  emoji: '🏊', label: 'Piscine' },
+];
+const SPA_SOIN_META = Object.fromEntries(SPA_SOINS.map(s => [s.key, s]));
+const soinLabel = (k) => SPA_SOIN_META[k]?.label || k;
+
+views.spa = () => {
+  const wrap = el('div');
+  wrap.appendChild(viewHeader('Spa', 'Note tes passages au spa et les soins que tu as faits.',
+    el('button', { class: 'btn', onClick: () => openSpaForm() }, '+ Nouvelle visite')));
+
+  const arr = [...state.spa].sort((a, b) => a.date.localeCompare(b.date));
+  const last = arr.at(-1);
+
+  if (last) {
+    const days = dateDiffDays(today(), last.date);
+    const sinceTxt = days <= 0 ? 'Aujourd\'hui' : days === 1 ? 'Hier' : `il y a ${days} j`;
+    const kpis = el('div', { class: 'grid cols-2' });
+    kpis.appendChild(kpiCard('🧖 Dernière visite', sinceTxt, fmtDate(last.date)));
+    kpis.appendChild(kpiCard('🗓️ Visites', String(arr.length), 'au total'));
+    wrap.appendChild(kpis);
+    wrap.appendChild(el('div', { style: 'height: 16px;' }));
+  }
+
+  const list = el('div', { class: 'card' }, el('h3', {}, 'Journal des visites'));
+  if (!arr.length) {
+    list.appendChild(emptyState('Aucune visite', 'Ajoute ta première visite au spa (sauna, hammam, massage…).'));
+  } else {
+    [...arr].reverse().forEach(v => {
+      const soins = (v.soins || []).map(soinLabel).join(' · ');
+      list.appendChild(el('div', { class: 'list-item' },
+        el('div', { style: 'min-width: 0;' },
+          el('div', { class: 'title' }, fmtDate(v.date)),
+          soins ? el('div', { class: 'meta' }, soins) : null,
+          v.notes ? el('div', { class: 'video-notes', style: 'margin-top: 6px;' }, v.notes) : null,
+        ),
+        el('div', { class: 'actions' },
+          el('button', { class: 'icon-btn', onClick: () => openSpaForm(v) }, '✎'),
+          el('button', { class: 'icon-btn danger', onClick: () =>
+            deleteWithUndo({ arr: state.spa, item: v, label: 'Visite', navView: 'spa' }) }, '✕'),
+        ),
+      ));
+    });
+  }
+  wrap.appendChild(list);
+
+  return wrap;
+};
+
+function openSpaForm(existing) {
+  const v = existing || { date: today(), soins: [], notes: '' };
+  const selectedSoins = new Set(v.soins || []);
+
+  openModal(existing ? 'Modifier la visite' : 'Nouvelle visite au spa', (close) => {
+    const form = el('form', { class: 'form', onSubmit: (e) => {
+      e.preventDefault();
+      const d = Object.fromEntries(new FormData(e.target));
+      const entry = {
+        id: existing?.id || id(),
+        date: d.date,
+        soins: Array.from(selectedSoins),
+        notes: (d.notes || '').trim(),
+      };
+      if (existing) state.spa = state.spa.map(x => x.id === entry.id ? entry : x);
+      else state.spa.push(entry);
+      save(); close(); navigate('spa'); toast(existing ? 'Visite mise à jour' : 'Visite ajoutée');
+    } });
+
+    form.appendChild(el('div', {},
+      el('label', {}, 'Date'),
+      el('input', { type: 'date', name: 'date', value: v.date || today(), required: '' }),
+    ));
+
+    const soinsField = el('div', {},
+      el('label', {}, 'Soins (sélectionne ce que tu as fait)'),
+      el('div', { class: 'muscle-grid' }),
+    );
+    const grid = soinsField.querySelector('.muscle-grid');
+    SPA_SOINS.forEach(s => {
+      const btn = el('button', {
+        type: 'button',
+        class: `muscle-btn${selectedSoins.has(s.key) ? ' active' : ''}`,
+        onClick: () => {
+          if (selectedSoins.has(s.key)) selectedSoins.delete(s.key);
+          else selectedSoins.add(s.key);
+          btn.classList.toggle('active');
+        },
+      }, el('span', { class: 'muscle-emoji' }, s.emoji), el('span', {}, s.label));
+      grid.appendChild(btn);
+    });
+    form.appendChild(soinsField);
+
+    form.appendChild(el('div', {},
+      el('label', {}, 'Notes (facultatif)'),
+      el('textarea', { name: 'notes', placeholder: 'Établissement, ressenti, autres soins…' }, v.notes || ''),
+    ));
+
+    form.appendChild(el('div', { class: 'form-actions' },
+      el('button', { type: 'button', class: 'btn secondary', onClick: close }, 'Annuler'),
+      el('button', { type: 'submit', class: 'btn' }, 'Enregistrer'),
+    ));
+
     return form;
   });
 }
