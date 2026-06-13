@@ -996,99 +996,6 @@ function endOfMonthRecapCard() {
   return card;
 }
 
-// Heatmap d'activité (style GitHub) : un carré par jour, intensité = nb d'activités
-function activityHeatmapCard() {
-  const counts = {};
-  const bump = (d) => { if (d) counts[d] = (counts[d] || 0) + 1; };
-  state.lifts.forEach(x => bump(x.date));
-  state.runs.forEach(x => bump(x.date));
-  state.badminton.matches.forEach(x => bump(x.date));
-  state.mobility.forEach(x => bump(x.date));
-  state.weight.forEach(x => bump(x.date));
-  state.recovery.forEach(x => bump(x.date));
-  state.sobriety.forEach(x => { if (!x.hasSlip) bump(x.date); });
-
-  const card = el('div', { class: 'card' });
-  card.appendChild(el('h3', {}, '🔥 Activité'));
-
-  // Fenêtre : ~26 semaines sur mobile, ~52 sur desktop
-  const weeks = window.matchMedia('(max-width: 720px)').matches ? 26 : 53;
-  const today0 = new Date(); today0.setHours(0, 0, 0, 0);
-  // On part du dimanche de la semaine en cours et on recule
-  const end = new Date(today0);
-  end.setDate(end.getDate() + (6 - ((end.getDay() + 6) % 7))); // fin de semaine ISO (dimanche)
-  const start = new Date(end);
-  start.setDate(start.getDate() - (weeks * 7 - 1));
-
-  const grid = el('div', { class: 'heatmap' });
-  let activeDays = 0;
-  for (let w = 0; w < weeks; w++) {
-    const col = el('div', { class: 'heatmap-col' });
-    for (let d = 0; d < 7; d++) {
-      const day = new Date(start);
-      day.setDate(start.getDate() + w * 7 + d);
-      const ds = ymd(day);
-      const n = counts[ds] || 0;
-      if (n) activeDays++;
-      const future = day > today0;
-      const level = future ? 'future' : n === 0 ? '0' : n === 1 ? '1' : n === 2 ? '2' : n === 3 ? '3' : '4';
-      col.appendChild(el('div', { class: `heatmap-cell lvl-${level}${future ? '' : ' tappable'}`,
-        title: future ? '' : `${fmtDate(ds)} — ${n} activité${n > 1 ? 's' : ''}`,
-        onClick: future ? null : () => { haptic(); openDayDetails(ds); } }));
-    }
-    grid.appendChild(col);
-  }
-
-  card.appendChild(el('div', { class: 'heatmap-scroll' }, grid));
-  card.appendChild(el('div', { class: 'heatmap-legend' },
-    el('span', {}, `${activeDays} jours actifs`),
-    el('div', { style: 'display: flex; align-items: center; gap: 4px;' },
-      el('span', { style: 'font-size: 11px; color: var(--text-dim);' }, 'moins'),
-      ...['0', '1', '2', '3', '4'].map(l => el('div', { class: `heatmap-cell lvl-${l}` })),
-      el('span', { style: 'font-size: 11px; color: var(--text-dim);' }, 'plus'),
-    ),
-  ));
-  return card;
-}
-
-// Détail des activités d'un jour donné (clic sur une case de la heatmap)
-function openDayDetails(ds) {
-  const lines = [];
-  state.lifts.filter(l => l.date === ds).forEach(l =>
-    lines.push(['🏋️', `Muscu — ${(l.groups || []).map(muscleLabel).join(', ') || '—'}${l.gym ? ' · ' + gymLabel(l.gym) : ''}`]));
-  state.runs.filter(r => r.date === ds).forEach(r =>
-    lines.push(['🏃', `Course — ${r.distance} km en ${r.duration} min`]));
-  state.badminton.matches.filter(m => m.date === ds).forEach(m =>
-    lines.push(['🏸', `Badminton — ${m.type || 'match'} (${m.result === 'win' ? 'victoire' : m.result === 'loss' ? 'défaite' : 'nul'})`]));
-  state.mobility.filter(m => m.date === ds).forEach(m =>
-    lines.push(['🧘', `AntiFragile — ${m.title || m.focus || 'mobilité'}`]));
-  state.weight.filter(w => w.date === ds).forEach(w =>
-    lines.push(['⚖️', `Poids — ${w.value} kg`]));
-  state.measurements.filter(m => m.date === ds).forEach(() =>
-    lines.push(['📏', 'Mensurations prises']));
-  state.recovery.filter(r => r.date === ds).forEach(r =>
-    lines.push(['🌙', `Récup — fatigue ${r.fatigue}/5 · douleurs ${r.pain}/5`]));
-  state.sobriety.filter(s => s.date === ds).forEach(s =>
-    lines.push([s.hasSlip ? '⚠️' : '✅', s.hasSlip ? `Écart — ${s.what || 'noté'}` : 'Journée saine']));
-  state.photos.filter(p => p.date === ds).forEach(() =>
-    lines.push(['📷', 'Photo ajoutée']));
-
-  openModal(fmtDate(ds), (close) => {
-    const wrap = el('div');
-    if (!lines.length) {
-      wrap.appendChild(emptyState('Rien ce jour-là', 'Aucune activité enregistrée.'));
-    } else {
-      lines.forEach(([emoji, txt]) => wrap.appendChild(el('div', { class: 'day-detail-row' },
-        el('span', { class: 'day-detail-emoji' }, emoji),
-        el('span', {}, txt),
-      )));
-    }
-    wrap.appendChild(el('div', { class: 'form-actions', style: 'margin-top: 14px;' },
-      el('button', { class: 'btn secondary', onClick: close }, 'Fermer')));
-    return wrap;
-  });
-}
-
 views.dashboard = () => {
   const wrap = el('div');
   wrap.appendChild(el('div', { class: 'view-header' },
@@ -1098,18 +1005,13 @@ views.dashboard = () => {
     ),
   ));
 
-  const matches = state.badminton.matches;
-  const wins = matches.filter(m => m.result === 'win').length;
-  const winRate = matches.length ? Math.round((wins / matches.length) * 100) : 0;
   const lastWeight = state.weight.at(-1);
   const firstWeight = state.weight[0];
   const weightDelta = lastWeight && firstWeight ? (lastWeight.value - firstWeight.value).toFixed(1) : null;
   const totalDistance = state.runs.reduce((s, r) => s + (r.distance || 0), 0);
   const recovery = state.recovery.at(-1);
 
-  const kpis = el('div', { class: 'grid cols-4' });
-  kpis.appendChild(kpiCard('🏸 Matchs joués', matches.length, `${wins} V — ${matches.length - wins} D`));
-  kpis.appendChild(kpiCard('🏆 Taux de victoire', `${winRate}%`, '', winRate >= 50 ? 'success' : 'danger'));
+  const kpis = el('div', { class: 'grid cols-2' });
   kpis.appendChild(kpiCard('⚖️ Poids actuel', lastWeight ? `${lastWeight.value} kg` : '—',
     weightDelta !== null ? `${weightDelta > 0 ? '+' : ''}${weightDelta} kg` : '', weightDelta < 0 ? 'success' : 'accent'));
   kpis.appendChild(kpiCard('🏃 Distance totale', `${totalDistance.toFixed(1)} km`, `${state.runs.length} sorties`));
@@ -1137,19 +1039,8 @@ views.dashboard = () => {
   wrap.appendChild(monthlyRecapCard());
   wrap.appendChild(el('div', { style: 'height: 16px;' }));
 
-  // Heatmap d'activité (toutes disciplines confondues)
-  wrap.appendChild(activityHeatmapCard());
-  wrap.appendChild(el('div', { style: 'height: 16px;' }));
-
-  const charts = el('div', { class: 'grid cols-2' });
-
-  const weightCard = el('div', { class: 'card' }, el('h3', {}, 'Évolution du poids'),
-    el('div', { class: 'chart-wrap' }, el('canvas', { id: 'dash-weight' })));
-  const matchCard = el('div', { class: 'card' }, el('h3', {}, 'Résultats badminton'),
-    el('div', { class: 'chart-wrap' }, el('canvas', { id: 'dash-matches' })));
-  charts.appendChild(weightCard);
-  charts.appendChild(matchCard);
-  wrap.appendChild(charts);
+  wrap.appendChild(el('div', { class: 'card' }, el('h3', {}, 'Évolution du poids'),
+    el('div', { class: 'chart-wrap' }, el('canvas', { id: 'dash-weight' }))));
 
   wrap.appendChild(el('div', { style: 'height: 16px;' }));
 
@@ -1200,22 +1091,6 @@ views.dashboard = () => {
           scales: baseScales() }
       });
     }
-    const wins = state.badminton.matches.filter(m => m.result === 'win').length;
-    const losses = state.badminton.matches.filter(m => m.result === 'loss').length;
-    chart($('#dash-matches').getContext('2d'), {
-      type: 'doughnut',
-      data: {
-        labels: ['Victoires', 'Défaites'],
-        datasets: [{
-          data: [wins, losses],
-          backgroundColor: [chartTheme.success, chartTheme.accent],
-          borderColor: 'transparent',
-        }],
-      },
-      options: { responsive: true, maintainAspectRatio: false,
-        plugins: { legend: { position: 'bottom', labels: { color: chartTheme.text } } },
-        cutout: '65%' }
-    });
   }, 0);
 
   return wrap;
@@ -3827,12 +3702,11 @@ function openPinForm(isChange) {
 }
 
 // =============================================================
-// Backup auto (snapshots quotidiens + rappel d'export)
+// Backup auto (snapshots quotidiens)
 // =============================================================
 
 const SNAPSHOT_INTERVAL_MS = 86400000;     // 1 instantané / jour max
 const SNAPSHOT_KEEP = 7;
-const EXPORT_REMINDER_DAYS = 14;
 
 async function maybeAutoSnapshot() {
   try {
@@ -3850,22 +3724,6 @@ async function maybeAutoSnapshot() {
       for (const old of all.slice(SNAPSHOT_KEEP)) await idbDel(STORE_SNAPSHOTS, old.key);
     }
   } catch {}
-}
-
-function showBackupReminderIfNeeded() {
-  const last = +localStorage.getItem('athelio:lastExport') || 0;
-  const days = last ? Math.floor((Date.now() - last) / 86400000) : Infinity;
-  if (days < EXPORT_REMINDER_DAYS) return;
-  const banner = el('div', { class: 'backup-banner' },
-    el('span', {}, last
-      ? `💾 Dernier export il y a ${days} jours — pense à sauvegarder.`
-      : '💾 Pense à exporter ta première sauvegarde.'),
-    el('div', { style: 'display: flex; gap: 6px;' },
-      el('button', { class: 'btn small', onClick: () => { exportData(); banner.remove(); } }, 'Exporter'),
-      el('button', { class: 'icon-btn', onClick: () => banner.remove() }, '✕'),
-    ),
-  );
-  document.body.appendChild(banner);
 }
 
 // =============================================================
@@ -4339,9 +4197,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   navigate('dashboard');
   playAppIntro();
 
-  // 3) Auto-snapshot quotidien + rappel d'export tous les 14 jours
+  // 3) Auto-snapshot quotidien (sauvegarde locale)
   maybeAutoSnapshot();
-  showBackupReminderIfNeeded();
 
   // 4) Auto-backup Google Drive à l'ouverture (silencieux, max 1/6 h)
   setTimeout(() => maybeAutoDriveBackup(), 2000); // laisse GSI se charger
