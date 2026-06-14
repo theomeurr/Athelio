@@ -1179,6 +1179,39 @@ body.nav-open .fab { opacity: 0; pointer-events: none; }
   line-height: 1.4;
 }
 
+/* Matchs (badminton) : liste compacte */
+.match-row {
+  padding: 8px 0 8px 12px;
+  border-bottom: 1px solid var(--border);
+  border-left: 3px solid transparent;
+}
+.match-row:last-child { border-bottom: none; }
+.match-row.win  { border-left-color: var(--success); }
+.match-row.loss { border-left-color: var(--danger); }
+.match-row.neutral { border-left-color: var(--text-dim); }
+.match-row-line {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.match-row-main {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  line-height: 1.45;
+}
+.match-row-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: 0 0 auto;
+}
+.match-row .match-notes {
+  margin-top: 6px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--border);
+}
+
 /* Match notes (badminton) */
 .match-notes-row td {
   background: rgba(255, 255, 255, 0.02);
