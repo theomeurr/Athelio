@@ -17,6 +17,7 @@ const defaultState = {
   mobility: [],
   mobilityVideos: [],
   spa: [],
+  haircut: [],
   sobriety: [],
   comparisons: [],
   settings: { liftWeeklyTarget: 3, haptics: true, reviewConfig: null, navConfig: null, theme: 'vintage' },
@@ -49,7 +50,7 @@ function migrate(parsed) {
   s.photos = parsed.photos || old.photos || [];
   delete s.progression;
   s.badminton = { ...defaultState.badminton, ...(parsed.badminton || {}) };
-  for (const k of ['weight', 'measurements', 'runs', 'lifts', 'photos', 'goals', 'recovery', 'videos', 'mobility', 'mobilityVideos', 'spa', 'sobriety', 'comparisons']) {
+  for (const k of ['weight', 'measurements', 'runs', 'lifts', 'photos', 'goals', 'recovery', 'videos', 'mobility', 'mobilityVideos', 'spa', 'haircut', 'sobriety', 'comparisons']) {
     if (!Array.isArray(s[k])) s[k] = [];
   }
   if (!Array.isArray(s.badminton.matches)) s.badminton.matches = [];
@@ -807,6 +808,7 @@ const NAV_ITEMS = [
   { key: 'mobility',     emoji: '🧘', label: 'AntiFragile',     section: 'bienetre' },
   { key: 'recovery',     emoji: '🌙', label: 'Récupération',    section: 'bienetre' },
   { key: 'spa',          emoji: '🧖', label: 'Spa',             section: 'bienetre' },
+  { key: 'haircut',      emoji: '💇', label: 'Coiffeur',        section: 'bienetre' },
   { key: 'goals',        emoji: '🎯', label: 'Objectifs',       section: 'divers' },
   { key: 'videos',       emoji: '🎥', label: 'Vidéos',          section: 'divers' },
 ];
@@ -863,6 +865,7 @@ const FAB_ACTIONS = {
   goals:       () => openGoalForm(),
   recovery:    () => openRecoveryForm(),
   spa:         () => openSpaForm(),
+  haircut:     () => openHaircutForm(),
   videos:      () => openVideoForm(),
 };
 
@@ -3194,6 +3197,199 @@ function openSpaForm(existing) {
     form.appendChild(el('div', {},
       el('label', {}, 'Notes (facultatif)'),
       el('textarea', { name: 'notes', placeholder: 'Établissement, ressenti, autres soins…' }, v.notes || ''),
+    ));
+
+    form.appendChild(el('div', { class: 'form-actions' },
+      el('button', { type: 'button', class: 'btn secondary', onClick: close }, 'Annuler'),
+      el('button', { type: 'submit', class: 'btn' }, 'Enregistrer'),
+    ));
+
+    return form;
+  });
+}
+
+// ---------- Coiffeur ----------
+// RDV à prendre chaque jeudi sur Planity pour y aller le dimanche, toutes les 3 semaines.
+const HAIRCUT_INTERVAL_DAYS = 21;        // 3 semaines entre deux visites
+const HAIRCUT_BOOKING_LEAD_DAYS = 3;     // jeudi → dimanche
+
+// Date au format "samedi 14 juin" (sans heure, sans année)
+const fmtDayDate = (s) =>
+  new Date(s + 'T12:00:00').toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long' });
+
+function nextHaircutInfo(lastDate) {
+  if (!lastDate) return null;
+  const ONE_DAY = 86400000;
+  const todayMs = new Date(today()).getTime();
+  const lastMs = new Date(lastDate).getTime();
+  const visitMs = lastMs + HAIRCUT_INTERVAL_DAYS * ONE_DAY;
+  const bookingMs = visitMs - HAIRCUT_BOOKING_LEAD_DAYS * ONE_DAY;
+  return {
+    booking: new Date(bookingMs).toISOString().slice(0, 10),
+    visit: new Date(visitMs).toISOString().slice(0, 10),
+    daysToBooking: Math.round((bookingMs - todayMs) / ONE_DAY),
+    daysToVisit: Math.round((visitMs - todayMs) / ONE_DAY),
+  };
+}
+
+function haircutAlertCard(info) {
+  let emoji, title, sub, level;
+  if (!info) {
+    emoji = '💇';
+    title = 'Note ta dernière visite';
+    sub = 'Pour activer le rappel de prise de rendez-vous.';
+    level = 'neutral';
+  } else if (info.daysToVisit < 0) {
+    emoji = '⏰';
+    title = `Visite en retard (${-info.daysToVisit} j)`;
+    sub = `La prochaine visite était prévue ${fmtDayDate(info.visit)}.`;
+    level = 'alert';
+  } else if (info.daysToBooking < 0) {
+    emoji = '⚠️';
+    title = 'Rendez-vous à prendre maintenant !';
+    sub = `Tu aurais dû réserver ${fmtDayDate(info.booking)} sur Planity. Visite ${fmtDayDate(info.visit)}.`;
+    level = 'alert';
+  } else if (info.daysToBooking === 0) {
+    emoji = '📅';
+    title = "Prends ton RDV aujourd'hui sur Planity !";
+    sub = `Pour aller au coiffeur ${fmtDayDate(info.visit)}.`;
+    level = 'action';
+  } else if (info.daysToBooking === 1) {
+    emoji = '⏳';
+    title = 'Rendez-vous à prendre demain';
+    sub = `Réserve ${fmtDayDate(info.booking)} sur Planity, pour ${fmtDayDate(info.visit)}.`;
+    level = 'action';
+  } else {
+    emoji = '✂️';
+    title = `Prochain RDV à prendre dans ${info.daysToBooking} j`;
+    sub = `Réserve ${fmtDayDate(info.booking)} sur Planity, pour ${fmtDayDate(info.visit)}.`;
+    level = 'neutral';
+  }
+
+  const styles = {
+    alert:   { bg: 'rgba(255,107,94,0.18)', border: 'rgba(255,107,94,0.55)', text: 'var(--danger)' },
+    action:  { bg: 'rgba(240,163,95,0.22)', border: 'rgba(240,163,95,0.6)',  text: 'var(--accent)' },
+    neutral: { bg: 'var(--accent-soft)',    border: 'var(--border)',         text: 'var(--text)' },
+  };
+  const s = styles[level];
+
+  return el('div', {
+    class: 'card',
+    style: `border-color: ${s.border}; background: linear-gradient(135deg, ${s.bg}, var(--panel-2)); display: flex; align-items: center; gap: 14px;`,
+  },
+    el('span', { style: 'font-size: 32px; line-height: 1; flex: 0 0 auto;' }, emoji),
+    el('div', { style: 'min-width: 0;' },
+      el('div', { style: `font-weight: 700; font-size: 15px; color: ${s.text};` }, title),
+      el('div', { style: 'font-size: 13px; color: var(--text-dim); margin-top: 3px;' }, sub),
+    ),
+  );
+}
+
+views.haircut = () => {
+  const wrap = el('div');
+  wrap.appendChild(viewHeader('Coiffeur', 'Note tes passages et garde un œil sur le prochain rendez-vous à prendre.',
+    el('button', { class: 'btn', onClick: () => openHaircutForm() }, '+ Nouvelle visite')));
+
+  const arr = [...state.haircut].sort((a, b) => a.date.localeCompare(b.date));
+  const last = arr.at(-1);
+
+  wrap.appendChild(haircutAlertCard(nextHaircutInfo(last?.date)));
+  // Bouton de réservation — sur mobile, iOS/Android ouvre l'app Planity si elle est installée
+  // (via universal links), sinon le site dans le navigateur.
+  wrap.appendChild(el('div', { style: 'margin-top: 12px;' },
+    el('a', { href: 'https://www.planity.com/', target: '_blank', rel: 'noopener noreferrer',
+      class: 'btn', style: 'text-decoration: none; display: inline-flex; align-items: center; gap: 6px;' },
+      '📅 Réserver sur Planity'),
+  ));
+  wrap.appendChild(el('div', { style: 'height: 16px;' }));
+
+  if (last) {
+    const days = dateDiffDays(today(), last.date);
+    const sinceTxt = days <= 0 ? 'Aujourd\'hui' : days === 1 ? 'Hier' : `il y a ${days} j`;
+    const kpis = el('div', { class: 'grid cols-2' });
+    kpis.appendChild(kpiCard('💇 Dernière visite', sinceTxt, fmtDate(last.date)));
+    kpis.appendChild(kpiCard('🗓️ Visites', String(arr.length), 'au total'));
+    wrap.appendChild(kpis);
+    wrap.appendChild(el('div', { style: 'height: 16px;' }));
+  }
+
+  const list = el('div', { class: 'card' }, el('h3', {}, 'Journal des visites'));
+  if (!arr.length) {
+    list.appendChild(emptyState('Aucune visite', 'Note ton premier passage chez le coiffeur.'));
+  } else {
+    [...arr].reverse().forEach(v => {
+      list.appendChild(el('div', { class: 'list-item' },
+        el('div', { style: 'min-width: 0;' },
+          el('div', { class: 'title' }, fmtDate(v.date)),
+          v.reason ? el('div', { class: 'meta' }, `⏪ Anticipée : ${v.reason}`) : null,
+          v.notes ? el('div', { class: 'video-notes', style: 'margin-top: 6px;' }, v.notes) : null,
+        ),
+        el('div', { class: 'actions' },
+          el('button', { class: 'icon-btn', onClick: () => openHaircutForm(v) }, '✎'),
+          el('button', { class: 'icon-btn danger', onClick: () =>
+            deleteWithUndo({ arr: state.haircut, item: v, label: 'Visite', navView: 'haircut' }) }, '✕'),
+        ),
+      ));
+    });
+  }
+  wrap.appendChild(list);
+
+  return wrap;
+};
+
+function openHaircutForm(existing) {
+  const v = existing || { date: today(), reason: '', notes: '' };
+
+  // Date « prévue » selon la précédente visite (hors entrée en cours d'édition),
+  // pour afficher un hint quand l'utilisateur saisit une date plus tôt que prévu.
+  const others = state.haircut.filter(x => x.id !== existing?.id);
+  const prevLast = [...others].sort((a, b) => a.date.localeCompare(b.date)).at(-1);
+  const expectedNext = prevLast
+    ? new Date(new Date(prevLast.date).getTime() + HAIRCUT_INTERVAL_DAYS * 86400000).toISOString().slice(0, 10)
+    : null;
+
+  openModal(existing ? 'Modifier la visite' : 'Nouvelle visite chez le coiffeur', (close) => {
+    const form = el('form', { class: 'form', onSubmit: (e) => {
+      e.preventDefault();
+      const d = Object.fromEntries(new FormData(e.target));
+      const entry = {
+        id: existing?.id || id(),
+        date: d.date,
+        reason: (d.reason || '').trim(),
+        notes: (d.notes || '').trim(),
+      };
+      if (existing) state.haircut = state.haircut.map(x => x.id === entry.id ? entry : x);
+      else state.haircut.push(entry);
+      save(); close(); navigate('haircut'); toast(existing ? 'Visite mise à jour' : 'Visite ajoutée');
+    } });
+
+    const dateInput = el('input', { type: 'date', name: 'date', value: v.date || today(), required: '' });
+    form.appendChild(el('div', {}, el('label', {}, 'Date'), dateInput));
+
+    const earlyHint = el('p', { class: 'form-hint', style: 'color: var(--accent); display: none;' });
+    form.appendChild(earlyHint);
+    const refreshHint = () => {
+      if (!expectedNext || !dateInput.value || dateInput.value >= expectedNext) {
+        earlyHint.style.display = 'none';
+        return;
+      }
+      const days = Math.round((new Date(expectedNext).getTime() - new Date(dateInput.value).getTime()) / 86400000);
+      earlyHint.textContent = `⏪ ${days} jour${days > 1 ? 's' : ''} plus tôt que prévu — pense à noter pourquoi.`;
+      earlyHint.style.display = '';
+    };
+    dateInput.addEventListener('input', refreshHint);
+    dateInput.addEventListener('change', refreshHint);
+    setTimeout(refreshHint, 0);
+
+    form.appendChild(el('div', {},
+      el('label', {}, 'Raison (si visite anticipée)'),
+      el('input', { type: 'text', name: 'reason', value: v.reason || '',
+        placeholder: 'Ex : Événement, mariage, envie de changement…' }),
+    ));
+
+    form.appendChild(el('div', {},
+      el('label', {}, 'Notes (facultatif)'),
+      el('textarea', { name: 'notes', placeholder: 'Coupe, couleur, salon, prix…' }, v.notes || ''),
     ));
 
     form.appendChild(el('div', { class: 'form-actions' },
