@@ -3294,6 +3294,13 @@ views.haircut = () => {
   const last = arr.at(-1);
 
   wrap.appendChild(haircutAlertCard(nextHaircutInfo(last?.date)));
+  // Bouton de réservation — sur mobile, iOS/Android ouvre l'app Planity si elle est installée
+  // (via universal links), sinon le site dans le navigateur.
+  wrap.appendChild(el('div', { style: 'margin-top: 12px;' },
+    el('a', { href: 'https://www.planity.com/', target: '_blank', rel: 'noopener noreferrer',
+      class: 'btn', style: 'text-decoration: none; display: inline-flex; align-items: center; gap: 6px;' },
+      '📅 Réserver sur Planity'),
+  ));
   wrap.appendChild(el('div', { style: 'height: 16px;' }));
 
   if (last) {
@@ -3314,6 +3321,7 @@ views.haircut = () => {
       list.appendChild(el('div', { class: 'list-item' },
         el('div', { style: 'min-width: 0;' },
           el('div', { class: 'title' }, fmtDate(v.date)),
+          v.reason ? el('div', { class: 'meta' }, `⏪ Anticipée : ${v.reason}`) : null,
           v.notes ? el('div', { class: 'video-notes', style: 'margin-top: 6px;' }, v.notes) : null,
         ),
         el('div', { class: 'actions' },
@@ -3330,7 +3338,15 @@ views.haircut = () => {
 };
 
 function openHaircutForm(existing) {
-  const v = existing || { date: today(), notes: '' };
+  const v = existing || { date: today(), reason: '', notes: '' };
+
+  // Date « prévue » selon la précédente visite (hors entrée en cours d'édition),
+  // pour afficher un hint quand l'utilisateur saisit une date plus tôt que prévu.
+  const others = state.haircut.filter(x => x.id !== existing?.id);
+  const prevLast = [...others].sort((a, b) => a.date.localeCompare(b.date)).at(-1);
+  const expectedNext = prevLast
+    ? new Date(new Date(prevLast.date).getTime() + HAIRCUT_INTERVAL_DAYS * 86400000).toISOString().slice(0, 10)
+    : null;
 
   openModal(existing ? 'Modifier la visite' : 'Nouvelle visite chez le coiffeur', (close) => {
     const form = el('form', { class: 'form', onSubmit: (e) => {
@@ -3339,6 +3355,7 @@ function openHaircutForm(existing) {
       const entry = {
         id: existing?.id || id(),
         date: d.date,
+        reason: (d.reason || '').trim(),
         notes: (d.notes || '').trim(),
       };
       if (existing) state.haircut = state.haircut.map(x => x.id === entry.id ? entry : x);
@@ -3346,9 +3363,28 @@ function openHaircutForm(existing) {
       save(); close(); navigate('haircut'); toast(existing ? 'Visite mise à jour' : 'Visite ajoutée');
     } });
 
+    const dateInput = el('input', { type: 'date', name: 'date', value: v.date || today(), required: '' });
+    form.appendChild(el('div', {}, el('label', {}, 'Date'), dateInput));
+
+    const earlyHint = el('p', { class: 'form-hint', style: 'color: var(--accent); display: none;' });
+    form.appendChild(earlyHint);
+    const refreshHint = () => {
+      if (!expectedNext || !dateInput.value || dateInput.value >= expectedNext) {
+        earlyHint.style.display = 'none';
+        return;
+      }
+      const days = Math.round((new Date(expectedNext).getTime() - new Date(dateInput.value).getTime()) / 86400000);
+      earlyHint.textContent = `⏪ ${days} jour${days > 1 ? 's' : ''} plus tôt que prévu — pense à noter pourquoi.`;
+      earlyHint.style.display = '';
+    };
+    dateInput.addEventListener('input', refreshHint);
+    dateInput.addEventListener('change', refreshHint);
+    setTimeout(refreshHint, 0);
+
     form.appendChild(el('div', {},
-      el('label', {}, 'Date'),
-      el('input', { type: 'date', name: 'date', value: v.date || today(), required: '' }),
+      el('label', {}, 'Raison (si visite anticipée)'),
+      el('input', { type: 'text', name: 'reason', value: v.reason || '',
+        placeholder: 'Ex : Événement, mariage, envie de changement…' }),
     ));
 
     form.appendChild(el('div', {},
