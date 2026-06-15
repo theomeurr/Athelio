@@ -865,6 +865,7 @@ body.nav-open .fab { opacity: 0; pointer-events: none; }
   height: 240px;
 }
 .chart-wrap.tall { height: 320px; }
+.chart-wrap.short { height: 170px; }
 
 /* Empty state */
 .empty {

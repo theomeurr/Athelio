@@ -1007,76 +1007,63 @@ views.dashboard = () => {
   wrap.appendChild(el('div', { class: 'view-header' },
     el('div', {},
       el('h2', {}, 'Tableau de bord'),
-      el('p', {}, 'Une vue d\'ensemble de ta progression.'),
+      el('p', {}, 'L\'essentiel de ta progression en un coup d\'œil.'),
     ),
   ));
 
+  // Résumé compact : snapshot de l'état actuel
   const lastWeight = state.weight.at(-1);
   const firstWeight = state.weight[0];
-  const weightDelta = lastWeight && firstWeight ? (lastWeight.value - firstWeight.value).toFixed(1) : null;
+  const weightDelta = lastWeight && firstWeight ? +(lastWeight.value - firstWeight.value).toFixed(1) : null;
   const totalDistance = state.runs.reduce((s, r) => s + (r.distance || 0), 0);
   const recovery = state.recovery.at(-1);
-
-  const kpis = el('div', { class: 'grid cols-2' });
-  kpis.appendChild(kpiCard('⚖️ Poids actuel', lastWeight ? `${lastWeight.value} kg` : '—',
-    weightDelta !== null ? `${weightDelta > 0 ? '+' : ''}${weightDelta} kg` : '', weightDelta < 0 ? 'success' : 'accent'));
-  kpis.appendChild(kpiCard('🏃 Distance totale', `${totalDistance.toFixed(1)} km`, `${state.runs.length} sorties`));
-  wrap.appendChild(kpis);
-
-  wrap.appendChild(el('div', { style: 'height: 16px;' }));
-
-  // Séries / streaks
   const sStreak = sobrietyStreak();
   const tStreak = trainingStreak();
-  const streaks = el('div', { class: 'grid cols-2' });
-  streaks.appendChild(streakCard('🔥', sStreak, 'Série sans écart',
-    sStreak >= 7 ? 'En feu, continue !' : (sStreak ? 'jours sans écart' : 'commence aujourd\'hui')));
-  streaks.appendChild(streakCard('💪', tStreak, 'Série d\'entraînement',
-    tStreak >= 3 ? 'belle régularité' : (tStreak ? 'jours d\'affilée' : 'bouge aujourd\'hui')));
-  wrap.appendChild(streaks);
 
+  const tiles = [
+    ['⚖️', lastWeight ? lastWeight.value : '—', 'Poids (kg)',
+      weightDelta != null ? el('span', { class: 'recap-delta flat' }, `${weightDelta > 0 ? '+' : ''}${weightDelta} kg`) : null],
+    ['🔥', sStreak, 'Jours sobriété', null],
+    ['💪', tStreak, 'Jours entraînement', null],
+    ['🏃', totalDistance.toFixed(0), 'km au total', null],
+  ];
+  if (recovery) tiles.push(['🌙', `${recovery.fatigue}/5`, 'Fatigue récup', null]);
+
+  const summary = el('div', { class: 'card' }, el('h3', {}, '✨ En un coup d\'œil'));
+  const sGrid = el('div', { class: 'recap-grid' });
+  tiles.forEach(([emoji, val, label, extra]) => sGrid.appendChild(el('div', { class: 'recap-item' },
+    el('div', { class: 'recap-emoji' }, emoji),
+    el('div', { class: 'recap-val' }, String(val)),
+    el('div', { class: 'recap-label' }, label),
+    extra || null,
+  )));
+  summary.appendChild(sGrid);
+  wrap.appendChild(summary);
   wrap.appendChild(el('div', { style: 'height: 16px;' }));
 
   // Bilan du mois écoulé (début de mois, dismissible)
   const eom = endOfMonthRecapCard();
   if (eom) { wrap.appendChild(eom); wrap.appendChild(el('div', { style: 'height: 16px;' })); }
 
-  // Récap du mois en cours
+  // Récap du mois en cours (vs mois dernier)
   wrap.appendChild(monthlyRecapCard());
   wrap.appendChild(el('div', { style: 'height: 16px;' }));
 
-  wrap.appendChild(el('div', { class: 'card' }, el('h3', {}, 'Évolution du poids'),
-    el('div', { class: 'chart-wrap' }, el('canvas', { id: 'dash-weight' }))));
-
-  wrap.appendChild(el('div', { style: 'height: 16px;' }));
-
-  // Goals + Recovery side by side
-  const lower = el('div', { class: 'grid cols-2' });
-  const goalsCard = el('div', { class: 'card' }, el('h3', {}, 'Objectifs en cours'));
-  const activeGoals = state.goals.filter(g => !g.done).slice(0, 4);
-  if (!activeGoals.length) {
-    goalsCard.appendChild(emptyState('Aucun objectif', 'Ajoute ton premier objectif dans la section Objectifs.'));
-  } else {
+  // Objectifs en cours (compact : top 3)
+  const activeGoals = state.goals.filter(g => !g.done).slice(0, 3);
+  if (activeGoals.length) {
+    const goalsCard = el('div', { class: 'card' }, el('h3', {}, '🎯 Objectifs en cours'));
     activeGoals.forEach(g => goalsCard.appendChild(goalRow(g, false)));
+    wrap.appendChild(goalsCard);
+    wrap.appendChild(el('div', { style: 'height: 16px;' }));
   }
-  lower.appendChild(goalsCard);
 
-  const recCard = el('div', { class: 'card' }, el('h3', {}, 'Récupération récente'));
-  if (!recovery) {
-    recCard.appendChild(emptyState('Aucune entrée', 'Note ta fatigue et tes douleurs.'));
-  } else {
-    const rows = el('div', {});
-    rows.appendChild(infoRow('Fatigue', `${recovery.fatigue}/5`));
-    rows.appendChild(infoRow('Douleurs', `${recovery.pain}/5`));
-    rows.appendChild(infoRow('Dernière entrée', fmtDate(recovery.date)));
-    recCard.appendChild(rows);
-  }
-  lower.appendChild(recCard);
-  wrap.appendChild(lower);
+  // Évolution du poids (graphe court — uniquement si données)
+  if (state.weight.length) {
+    wrap.appendChild(el('div', { class: 'card' }, el('h3', {}, '⚖️ Évolution du poids'),
+      el('div', { class: 'chart-wrap short' }, el('canvas', { id: 'dash-weight' }))));
 
-  // Charts deferred until in DOM
-  setTimeout(() => {
-    if (state.weight.length) {
+    setTimeout(() => {
       chart($('#dash-weight').getContext('2d'), {
         type: 'line',
         data: {
@@ -1088,7 +1075,7 @@ views.dashboard = () => {
             backgroundColor: 'rgba(240, 163, 95, 0.15)',
             fill: true,
             tension: 0.35,
-            pointRadius: 4,
+            pointRadius: 3,
             pointBackgroundColor: chartTheme.accent,
           }],
         },
@@ -1096,8 +1083,8 @@ views.dashboard = () => {
           plugins: { legend: { display: false } },
           scales: baseScales() }
       });
-    }
-  }, 0);
+    }, 0);
+  }
 
   return wrap;
 };
@@ -1107,24 +1094,6 @@ function kpiCard(label, value, sub = '', kind = '') {
     el('div', { class: 'label' }, label),
     el('div', { class: `value ${kind}` }, String(value)),
     sub ? el('div', { class: 'sub' }, sub) : null,
-  );
-}
-
-function streakCard(emoji, days, label, sub = '') {
-  return el('div', { class: `card streak ${days ? 'on' : ''}` },
-    el('div', { class: 'streak-emoji' }, emoji),
-    el('div', { class: 'streak-body' },
-      el('div', { class: 'streak-value' }, String(days), el('span', { class: 'streak-unit' }, days > 1 ? ' jours' : ' jour')),
-      el('div', { class: 'streak-label' }, label),
-      sub ? el('div', { class: 'streak-sub' }, sub) : null,
-    ),
-  );
-}
-
-function infoRow(k, v) {
-  return el('div', { class: 'list-item' },
-    el('div', { class: 'title', style: 'font-weight: 500; color: var(--text-dim); font-size: 13px;' }, k),
-    el('div', { style: 'font-weight: 600; font-size: 14px;' }, v),
   );
 }
 
