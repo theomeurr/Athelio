@@ -1279,6 +1279,8 @@ body.nav-open .fab { opacity: 0; pointer-events: none; }
   gap: 12px;
   padding: 6px 0 12px;
 }
+/* L'attribut hidden doit l'emporter sur display: grid */
+.match-notes[hidden] { display: none; }
 .note-block {
   background: var(--bg);
   border: 1px solid var(--border);

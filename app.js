@@ -1135,6 +1135,7 @@ function emptyState(title, sub) {
 // ---------- Badminton ----------
 
 let badmintonTab = 'matches';
+let badmintonFilter = 'all'; // 'all' | 'win' | 'loss'
 
 views.badminton = () => {
   const wrap = el('div');
@@ -1174,8 +1175,28 @@ views.badminton = () => {
     if (!matches.length) {
       card.appendChild(emptyState('Aucun match', 'Ajoute ton premier match pour commencer.'));
     } else {
-      const list = el('div', { class: 'match-list' });
-      [...matches].sort((a, b) => b.date.localeCompare(a.date)).forEach(m => {
+      const winCount = matches.filter(m => matchResult(m) === 'win').length;
+      const lossCount = matches.filter(m => matchResult(m) === 'loss').length;
+      const filterChip = (key, label, count) => el('button', {
+        class: `tag-chip ${badmintonFilter === key ? 'active' : ''}`,
+        onClick: () => { badmintonFilter = key; navigate('badminton'); },
+      }, `${label} · ${count}`);
+      card.appendChild(el('div', { class: 'tag-filter' },
+        filterChip('all', 'Tous', matches.length),
+        filterChip('win', '✅ Victoires', winCount),
+        filterChip('loss', '❌ Défaites', lossCount),
+      ));
+
+      const filtered = badmintonFilter === 'all'
+        ? matches
+        : matches.filter(m => matchResult(m) === badmintonFilter);
+      if (!filtered.length) {
+        card.appendChild(emptyState('Aucun match', badmintonFilter === 'win'
+          ? 'Pas encore de victoire enregistrée.'
+          : 'Pas encore de défaite enregistrée.'));
+      } else {
+        const list = el('div', { class: 'match-list' });
+        [...filtered].sort((a, b) => b.date.localeCompare(a.date)).forEach(m => {
         const hasNotes = (m.goodPoints || m.badPoints || m.workPoints || m.notes || '').trim().length > 0;
         const setsWon = matchSetsWon(m);
         const result = matchResult(m);
@@ -1225,8 +1246,9 @@ views.badminton = () => {
           ),
           notesBlock,
         ));
-      });
-      card.appendChild(list);
+        });
+        card.appendChild(list);
+      }
     }
     wrap.appendChild(card);
   } else if (badmintonTab === 'tournaments') {
