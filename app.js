@@ -1174,55 +1174,48 @@ views.badminton = () => {
     if (!matches.length) {
       card.appendChild(emptyState('Aucun match', 'Ajoute ton premier match pour commencer.'));
     } else {
-      const table = el('table');
-      table.appendChild(el('thead', {}, el('tr', {},
-        ...['Date', 'Adversaire', 'Type', 'Sets', 'Score', 'Résultat', ''].map(h => el('th', {}, h)))));
-      const tbody = el('tbody');
+      const list = el('div', { class: 'match-list' });
       [...matches].sort((a, b) => b.date.localeCompare(a.date)).forEach(m => {
         const hasNotes = (m.goodPoints || m.badPoints || m.workPoints || m.notes || '').trim().length > 0;
         const setsWon = matchSetsWon(m);
         const result = matchResult(m);
-        const detailRow = el('tr', { class: 'match-notes-row', hidden: '' },
-          el('td', { colspan: '7' },
-            el('div', { class: 'match-notes' },
-              noteBlock('✅ Bien fait', m.goodPoints),
-              noteBlock('❌ Mal fait', m.badPoints),
-              noteBlock('🎯 À travailler', m.workPoints),
-              (m.notes && m.notes.trim()) ? noteBlock('📝 Notes', m.notes) : null,
+        const partnerLbl = matchPartnerLabel(m);
+        const resCls = result === 'win' ? 'win' : result === 'loss' ? 'loss' : 'neutral';
+        const resTxt = result === 'win' ? 'V' : result === 'loss' ? 'D' : 'N';
+        const resTitle = result === 'win' ? 'Victoire' : result === 'loss' ? 'Défaite' : 'Égalité';
+        const scoreLbl = matchScoreLabel(m);
+        const scoreTxt = scoreLbl === '—' ? '—' : `${setsWon.me}–${setsWon.opp} · ${scoreLbl}`;
+
+        const notesBlock = el('div', { class: 'match-notes', hidden: '' },
+          noteBlock('✅ Bien fait', m.goodPoints),
+          noteBlock('❌ Mal fait', m.badPoints),
+          noteBlock('🎯 À travailler', m.workPoints),
+          (m.notes && m.notes.trim()) ? noteBlock('📝 Notes', m.notes) : null,
+        );
+        const toggle = hasNotes ? el('button', { class: 'icon-btn', title: 'Voir les notes',
+          onClick: (e) => {
+            const open = notesBlock.hasAttribute('hidden');
+            if (open) notesBlock.removeAttribute('hidden'); else notesBlock.setAttribute('hidden', '');
+            e.currentTarget.textContent = open ? '▴' : '▾';
+          } }, '▾') : null;
+
+        list.appendChild(el('div', { class: `match-row ${resCls}` },
+          el('div', { class: 'match-row-line' },
+            el('span', { class: `badge ${resCls}`, title: resTitle }, resTxt),
+            el('div', { class: 'match-row-main' },
+              `${shortDate(m.date)} · ${matchOpponentLabel(m)} · ${m.type} · ${scoreTxt}${partnerLbl ? ' (' + partnerLbl + ')' : ''}`,
+            ),
+            el('div', { class: 'match-row-actions' },
+              toggle,
+              el('button', { class: 'icon-btn', onClick: () => openMatchForm(m) }, '✎'),
+              el('button', { class: 'icon-btn danger', onClick: () =>
+                deleteWithUndo({ arr: state.badminton.matches, item: m, label: 'Match', navView: 'badminton' }) }, '✕'),
             ),
           ),
-        );
-        const toggle = hasNotes ? el('button', { class: 'icon-btn', title: 'Voir les notes', onClick: (e) => {
-          const open = detailRow.hasAttribute('hidden');
-          if (open) detailRow.removeAttribute('hidden'); else detailRow.setAttribute('hidden', '');
-          e.currentTarget.textContent = open ? '▴' : '▾';
-        } }, '▾') : null;
-        const resBadge = result === 'win' ? '<span class="badge win">Victoire</span>'
-                       : result === 'loss' ? '<span class="badge loss">Défaite</span>'
-                       : '<span class="badge neutral">Égalité</span>';
-        const partnerLbl = matchPartnerLabel(m);
-        const oppCell = el('td', {},
-          el('div', {}, matchOpponentLabel(m)),
-          partnerLbl ? el('div', { style: 'font-size: 11px; color: var(--text-dim); margin-top: 2px;' }, partnerLbl) : null,
-        );
-        tbody.appendChild(el('tr', {},
-          el('td', {}, fmtDate(m.date)),
-          oppCell,
-          el('td', { html: `<span class="badge neutral">${m.type}</span>` }),
-          el('td', { style: 'white-space: nowrap;' }, `${setsWon.me}–${setsWon.opp}`),
-          el('td', { style: 'white-space: nowrap;' }, matchScoreLabel(m)),
-          el('td', { html: resBadge }),
-          el('td', { style: 'text-align: right; white-space: nowrap;' },
-            toggle,
-            el('button', { class: 'icon-btn', onClick: () => openMatchForm(m) }, '✎'),
-            el('button', { class: 'icon-btn danger', onClick: () =>
-              deleteWithUndo({ arr: state.badminton.matches, item: m, label: 'Match', navView: 'badminton' }) }, '✕'),
-          ),
+          notesBlock,
         ));
-        tbody.appendChild(detailRow);
       });
-      table.appendChild(tbody);
-      card.appendChild(table);
+      card.appendChild(list);
     }
     wrap.appendChild(card);
   } else if (badmintonTab === 'tournaments') {
