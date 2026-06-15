@@ -1197,10 +1197,11 @@ views.badminton = () => {
       } else {
         const list = el('div', { class: 'match-list' });
         [...filtered].sort((a, b) => b.date.localeCompare(a.date)).forEach(m => {
-        const hasNotes = (m.goodPoints || m.badPoints || m.workPoints || m.notes || '').trim().length > 0;
         const setsWon = matchSetsWon(m);
         const result = matchResult(m);
         const partnerLbl = matchPartnerLabel(m);
+        const isDbl = isDoubles(m);
+        const showPartner = isDbl && (m.partner || '').trim();
         const resCls = result === 'win' ? 'win' : result === 'loss' ? 'loss' : 'neutral';
         const resTitle = result === 'win' ? 'Victoire' : result === 'loss' ? 'Défaite' : 'Égalité';
         const scoreLbl = matchScoreLabel(m);
@@ -1214,17 +1215,19 @@ views.badminton = () => {
             );
 
         const notesBlock = el('div', { class: 'match-notes', hidden: '' },
+          noteBlock(isDbl ? '👥 Adversaires' : '👤 Adversaire', matchOpponentLabel(m)),
+          showPartner ? noteBlock('🤝 Partenaire', m.partner.trim()) : null,
           noteBlock('✅ Bien fait', m.goodPoints),
           noteBlock('❌ Mal fait', m.badPoints),
           noteBlock('🎯 À travailler', m.workPoints),
           (m.notes && m.notes.trim()) ? noteBlock('📝 Notes', m.notes) : null,
         );
-        const toggle = hasNotes ? el('button', { class: 'icon-btn', title: 'Voir les détails',
+        const toggle = el('button', { class: 'icon-btn', title: 'Voir les détails',
           onClick: (e) => {
             const open = notesBlock.hasAttribute('hidden');
             if (open) notesBlock.removeAttribute('hidden'); else notesBlock.setAttribute('hidden', '');
             e.currentTarget.textContent = open ? '▴' : '▾';
-          } }, '▾') : null;
+          } }, '▾');
 
         list.appendChild(el('div', { class: `match-row ${resCls}` },
           el('div', { class: 'match-row-line' },
