@@ -1181,10 +1181,16 @@ views.badminton = () => {
         const result = matchResult(m);
         const partnerLbl = matchPartnerLabel(m);
         const resCls = result === 'win' ? 'win' : result === 'loss' ? 'loss' : 'neutral';
-        const resTxt = result === 'win' ? 'V' : result === 'loss' ? 'D' : 'N';
         const resTitle = result === 'win' ? 'Victoire' : result === 'loss' ? 'Défaite' : 'Égalité';
         const scoreLbl = matchScoreLabel(m);
-        const scoreTxt = scoreLbl === '—' ? '—' : `${setsWon.me}–${setsWon.opp} · ${scoreLbl}`;
+
+        const scoreEl = scoreLbl === '—'
+          ? el('div', { class: 'match-score-pill empty', title: resTitle }, '—')
+          : el('div', { class: 'match-score-pill', title: resTitle },
+              el('span', { class: 'match-score-me' }, String(setsWon.me)),
+              el('span', { class: 'match-score-sep' }, '–'),
+              el('span', { class: 'match-score-opp' }, String(setsWon.opp)),
+            );
 
         const notesBlock = el('div', { class: 'match-notes', hidden: '' },
           noteBlock('✅ Bien fait', m.goodPoints),
@@ -1192,7 +1198,7 @@ views.badminton = () => {
           noteBlock('🎯 À travailler', m.workPoints),
           (m.notes && m.notes.trim()) ? noteBlock('📝 Notes', m.notes) : null,
         );
-        const toggle = hasNotes ? el('button', { class: 'icon-btn', title: 'Voir les notes',
+        const toggle = hasNotes ? el('button', { class: 'icon-btn', title: 'Voir les détails',
           onClick: (e) => {
             const open = notesBlock.hasAttribute('hidden');
             if (open) notesBlock.removeAttribute('hidden'); else notesBlock.setAttribute('hidden', '');
@@ -1201,9 +1207,14 @@ views.badminton = () => {
 
         list.appendChild(el('div', { class: `match-row ${resCls}` },
           el('div', { class: 'match-row-line' },
-            el('span', { class: `badge ${resCls}`, title: resTitle }, resTxt),
+            scoreEl,
             el('div', { class: 'match-row-main' },
-              `${shortDate(m.date)} · ${matchOpponentLabel(m)} · ${m.type} · ${scoreTxt}${partnerLbl ? ' (' + partnerLbl + ')' : ''}`,
+              el('div', { class: 'match-row-title' },
+                matchOpponentLabel(m),
+                partnerLbl ? el('span', { class: 'match-row-partner' }, ' · ' + partnerLbl) : null,
+              ),
+              el('div', { class: 'match-row-meta' },
+                `${shortDate(m.date)} · ${m.type}${scoreLbl !== '—' ? ' · ' + scoreLbl : ''}`),
             ),
             el('div', { class: 'match-row-actions' },
               toggle,
