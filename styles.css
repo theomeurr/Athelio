@@ -17,6 +17,37 @@
   --radius-sm: 12px;
 }
 
+/* Thème : Clair */
+[data-theme="clair"] {
+  --bg: #f5f3ef;
+  --bg-2: #ede9e3;
+  --panel: #ffffff;
+  --panel-2: #f0ede8;
+  --border: #d4cfc8;
+  --text: #2a2420;
+  --text-dim: #8a7f77;
+  --accent: #c0612a;
+  --accent-2: #a85024;
+  --accent-soft: rgba(192, 97, 42, 0.12);
+  --success: #2a8c5a;
+  --danger: #d63b2f;
+  --info: #5578a8;
+  --shadow: 0 14px 36px rgba(0, 0, 0, 0.10);
+}
+[data-theme="clair"] body::before {
+  background: radial-gradient(1200px 600px at -10% -10%, rgba(192, 97, 42, 0.06), transparent 60%),
+              radial-gradient(900px 500px at 110% 0%, rgba(192, 97, 42, 0.04), transparent 60%);
+}
+[data-theme="clair"] .sidebar {
+  background: linear-gradient(180deg, var(--bg-2), #e4dfd8);
+}
+[data-theme="clair"] .logo {
+  background-color: #2a2420;
+}
+[data-theme="clair"] .fab { color: #fff; }
+[data-theme="clair"] tr:hover td { background: rgba(0, 0, 0, 0.02); }
+[data-theme="clair"] .heatmap-cell.lvl-0 { background: rgba(0, 0, 0, 0.06); }
+
 /* Thème : Bleu nuit */
 [data-theme="nuit"] {
   --bg: #0a1828;
@@ -809,6 +840,7 @@ body.locked { overflow: hidden; }
 .theme-nuit .theme-swatch-dot { background: linear-gradient(135deg, #132840, #f6c9a0); }
 .theme-nature .theme-swatch-dot { background: linear-gradient(135deg, #233444, #f2c79a); }
 .theme-foret .theme-swatch-dot { background: linear-gradient(135deg, #1b332b, #e9b873); }
+.theme-clair .theme-swatch-dot { background: linear-gradient(135deg, #ede9e3, #c0612a); border-color: #d4cfc8; }
 
 /* Bouton d'ajout rapide (FAB) */
 .fab {

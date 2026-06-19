@@ -759,6 +759,7 @@ const THEMES = [
   { key: 'nuit',    label: 'Bleu nuit', emoji: '🌌', bg: '#0a1828' },
   { key: 'nature',  label: 'Nature', emoji: '🌿', bg: '#16222e' },
   { key: 'foret',   label: 'Forêt', emoji: '🌲', bg: '#101d18' },
+  { key: 'clair',   label: 'Clair', emoji: '☀️', bg: '#f5f3ef' },
 ];
 
 function applyTheme(key) {
@@ -3090,6 +3091,8 @@ function openMobilityForm(existing) {
 
 // ---------- Spa / Bien-être ----------
 
+const SPA_ABONNEMENT = { annuel: 210, dateDebut: '2026-06-19', seanceUnitaire: 18 };
+
 const SPA_SOINS = [
   { key: 'sauna',    emoji: '🧖', label: 'Sauna' },
   { key: 'hammam',   emoji: '♨️', label: 'Hammam' },
@@ -3111,6 +3114,79 @@ views.spa = () => {
 
   const arr = [...state.spa].sort((a, b) => a.date.localeCompare(b.date));
   const last = arr.at(-1);
+
+  // Bloc abonnement + rentabilisation
+  const { annuel, dateDebut, seanceUnitaire } = SPA_ABONNEMENT;
+  const seancesNecessaires = Math.ceil(annuel / seanceUnitaire);          // 12 séances
+  const seancesFaites = arr.length;
+  const economie = seancesFaites * seanceUnitaire - annuel;
+  const pctRentab = Math.min(100, Math.round((seancesFaites / seancesNecessaires) * 100));
+  const rentabilise = seancesFaites >= seancesNecessaires;
+
+  const aboCard = el('div', { class: 'card', style: 'margin-bottom: 16px;' });
+  aboCard.appendChild(el('h3', {}, '💳 Abonnement annuel'));
+
+  const aboKpis = el('div', { class: 'grid cols-4', style: 'gap: 12px; margin-bottom: 16px;' });
+
+  // KPI : coût abonnement
+  const k1 = el('div', { class: 'kpi' });
+  k1.appendChild(el('div', { class: 'label' }, 'Abonnement'));
+  k1.appendChild(el('div', { class: 'value accent' }, `${annuel} €`));
+  k1.appendChild(el('div', { class: 'sub' }, `payé le ${fmtDate(dateDebut)}`));
+  aboKpis.appendChild(k1);
+
+  // KPI : séances faites
+  const k2 = el('div', { class: 'kpi' });
+  k2.appendChild(el('div', { class: 'label' }, 'Séances faites'));
+  k2.appendChild(el('div', { class: 'value' }, `${seancesFaites}`));
+  k2.appendChild(el('div', { class: 'sub' }, `sur ${seancesNecessaires} pour rentabiliser`));
+  aboKpis.appendChild(k2);
+
+  // KPI : séances restantes ou rentabilisé
+  const k3 = el('div', { class: 'kpi' });
+  k3.appendChild(el('div', { class: 'label' }, 'Pour rentabiliser'));
+  if (rentabilise) {
+    k3.appendChild(el('div', { class: 'value success' }, '✓ Rentabilisé'));
+    k3.appendChild(el('div', { class: 'sub' }, `dès la ${seancesNecessaires}e séance`));
+  } else {
+    const restantes = seancesNecessaires - seancesFaites;
+    k3.appendChild(el('div', { class: 'value' }, `${restantes} séance${restantes > 1 ? 's' : ''}`));
+    k3.appendChild(el('div', { class: 'sub' }, 'encore à effectuer'));
+  }
+  aboKpis.appendChild(k3);
+
+  // KPI : économie / surcoût
+  const k4 = el('div', { class: 'kpi' });
+  k4.appendChild(el('div', { class: 'label' }, rentabilise ? 'Économie générée' : 'Coût restant à amortir'));
+  if (rentabilise) {
+    k4.appendChild(el('div', { class: 'value success' }, `+ ${economie} €`));
+    k4.appendChild(el('div', { class: 'sub' }, `vs tarif à l'unité (${seanceUnitaire} €/séance)`));
+  } else {
+    k4.appendChild(el('div', { class: 'value danger' }, `${Math.abs(economie)} €`));
+    k4.appendChild(el('div', { class: 'sub' }, `tarif unitaire : ${seanceUnitaire} €`));
+  }
+  aboKpis.appendChild(k4);
+
+  aboCard.appendChild(aboKpis);
+
+  // Barre de progression
+  const progressLabel = el('div', { style: 'display: flex; justify-content: space-between; font-size: 12px; color: var(--text-dim); margin-bottom: 6px;' });
+  progressLabel.appendChild(el('span', {}, `${seancesFaites} / ${seancesNecessaires} séances`));
+  progressLabel.appendChild(el('span', {}, `${pctRentab} %`));
+  aboCard.appendChild(progressLabel);
+
+  const progressBar = el('div', { class: 'progress' });
+  const fill = el('div', { class: `progress-fill${rentabilise ? ' full' : ''}`, style: `width: ${pctRentab}%` });
+  progressBar.appendChild(fill);
+  aboCard.appendChild(progressBar);
+
+  if (rentabilise) {
+    const bonus = el('div', { style: 'margin-top: 10px; font-size: 13px; color: var(--success); font-weight: 600;' });
+    bonus.textContent = `🎉 Chaque nouvelle séance t'économise ${seanceUnitaire} € de plus !`;
+    aboCard.appendChild(bonus);
+  }
+
+  wrap.appendChild(aboCard);
 
   if (last) {
     const days = dateDiffDays(today(), last.date);
